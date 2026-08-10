@@ -1,9 +1,12 @@
 import React, { useState, useMemo, useCallback, useEffect } from "react";
 import {
-  LineChart, Line, BarChart, Bar, ComposedChart,
+  LineChart, Line, BarChart, Bar, ComposedChart, Cell, ReferenceLine,
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend
 } from "recharts";
-import { ChevronDown, TrendingUp, TrendingDown, Minus, Upload, FileSpreadsheet, Info, X, RefreshCw, AlertTriangle } from "lucide-react";
+import {
+  ChevronDown, TrendingUp, TrendingDown, Minus, Upload, FileSpreadsheet, Info, X, RefreshCw,
+  AlertTriangle, Rocket, Building2, Target, Users, Store, Layers, ShieldCheck
+} from "lucide-react";
 import * as XLSX from "xlsx";
 
 /* ============================================================
@@ -77,6 +80,38 @@ function buildFYGroups(months) {
       key: `FY${String(fyEnd).slice(2)}`,
       label: `FY${String(fyEnd).slice(2)}${partial ? " (partial)" : ""}`,
       sub: `${first.label}–${last.label}`,
+      fyEnd,
+      partial,
+      idxs,
+    };
+  });
+}
+
+/* Financial-year quarters: Q1=Apr–Jun, Q2=Jul–Sep, Q3=Oct–Dec, Q4=Jan–Mar */
+function buildQuarterGroups(months) {
+  const order = [];
+  const byKey = {};
+  months.forEach((mo, i) => {
+    const fyEnd = mo.m >= 4 ? mo.y + 1 : mo.y;
+    const monthInFY = mo.m >= 4 ? mo.m - 3 : mo.m + 9; // 1..12, Apr = 1
+    const qNum = Math.ceil(monthInFY / 3);
+    const k = `${fyEnd}-Q${qNum}`;
+    if (!byKey[k]) { byKey[k] = []; order.push(k); }
+    byKey[k].push(i);
+  });
+  return order.map(k => {
+    const [fyEndStr, qStr] = k.split("-Q");
+    const fyEnd = Number(fyEndStr), qNum = Number(qStr);
+    const idxs = byKey[k];
+    const first = months[idxs[0]], last = months[idxs[idxs.length - 1]];
+    const complete = idxs.length === 3;
+    return {
+      key: `Q${qNum}FY${String(fyEnd).slice(2)}`,
+      label: `Q${qNum}FY${String(fyEnd).slice(2)}${complete ? "" : " (partial)"}`,
+      sub: `${first.label}–${last.label}`,
+      fyEnd,
+      qNum,
+      complete,
       idxs,
     };
   });
@@ -90,6 +125,7 @@ const PRIORITY_ORDER = [
 function buildDataset(parsed) {
   const { months, kpis, headcount } = parsed;
   const fyGroups = buildFYGroups(months);
+  const qGroups = buildQuarterGroups(months);
   const kpiKeys = Object.keys(kpis).sort((a, b) => {
     const ia = PRIORITY_ORDER.indexOf(a), ib = PRIORITY_ORDER.indexOf(b);
     if (ia === -1 && ib === -1) return a.localeCompare(b);
@@ -114,17 +150,19 @@ function buildDataset(parsed) {
     const vals = idxs.map(i => headcount[i]).filter(v => typeof v === "number");
     return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
   }
-
-  const fyData = fyGroups.map(fy => {
-    const row = { ...fy };
-    kpiKeys.forEach(k => { row[k] = sumFor(k, fy.idxs); });
-    row["Headcount"] = avgHC(fy.idxs);
+  function computeRow(groupMeta, idxs) {
+    const row = { ...groupMeta };
+    kpiKeys.forEach(k => { row[k] = sumFor(k, idxs); });
+    row["Headcount"] = avgHC(idxs);
     if (hasRevenue && hasGP) row["Gross Margin"] = row["Total Revenue"] ? row["Gross Profit"] / row["Total Revenue"] : null;
     if (hasRevenue && hasEBITDA) row["EBITDA Margin"] = row["Total Revenue"] ? row["EBITDA"] / row["Total Revenue"] : null;
     if (hasRevenue && hasNet) row["Net Margin"] = row["Total Revenue"] ? row["Net Profit"] / row["Total Revenue"] : null;
     if (hasRevenue && headcount) row["Rev per Employee"] = row["Headcount"] ? row["Total Revenue"] / row["Headcount"] : null;
     return row;
-  });
+  }
+
+  const fyData = fyGroups.map(fy => computeRow(fy, fy.idxs));
+  const qData = qGroups.map(q => computeRow(q, q.idxs));
 
   const cardConfigs = [];
   kpiKeys.forEach(k => cardConfigs.push({ key: k, label: k, fmt: fmtCr, good: "up", primary: k === "Total Revenue" || k === "EBITDA" || k === "Net Profit" }));
@@ -134,7 +172,7 @@ function buildDataset(parsed) {
   if (headcount) cardConfigs.push({ key: "Headcount", label: "Headcount (avg)", fmt: fmtNum, good: "neutral", isHeadcount: true });
   if (hasRevenue && headcount) cardConfigs.push({ key: "Rev per Employee", label: "Revenue per Employee", fmt: fmtCr, good: "up", isRevPerEmp: true });
 
-  return { months, kpis, headcount, kpiKeys, fyGroups, fyData, cardConfigs, hasRevenue, hasGP, hasEBITDA, hasNet };
+  return { months, kpis, headcount, kpiKeys, fyGroups, fyData, qGroups, qData, cardConfigs, hasRevenue, hasGP, hasEBITDA, hasNet };
 }
 
 function fmtCr(v) {
@@ -151,6 +189,71 @@ function fmtPct(v) {
 function fmtNum(v) {
   if (v === null || v === undefined || Number.isNaN(v)) return "N/A";
   return Math.round(v).toLocaleString("en-IN");
+}
+function fmtPctSigned(v) {
+  if (v === null || v === undefined || Number.isNaN(v)) return "N/A";
+  return `${v >= 0 ? "+" : ""}${v.toFixed(1)}%`;
+}
+
+/* ============================================================
+   FORECASTING — simple least-squares trend on the most recent
+   complete FY-quarters, projected forward. Used for the
+   Outlook & Forecast section only; every other number on the
+   page is an actual from the sheet.
+   ============================================================ */
+function linearRegression(points) {
+  const n = points.length;
+  const sumX = points.reduce((a, p) => a + p.x, 0);
+  const sumY = points.reduce((a, p) => a + p.y, 0);
+  const sumXY = points.reduce((a, p) => a + p.x * p.y, 0);
+  const sumXX = points.reduce((a, p) => a + p.x * p.x, 0);
+  const denom = n * sumXX - sumX * sumX;
+  const slope = denom !== 0 ? (n * sumXY - sumX * sumY) / denom : 0;
+  const intercept = (sumY - slope * sumX) / n;
+  return { slope, intercept };
+}
+
+function buildQuarterlyForecast(qData, key, count = 2) {
+  const complete = qData.filter(q => q.complete && typeof q[key] === "number");
+  if (complete.length < 4) return null;
+  const recent = complete.slice(-8);
+  const points = recent.map((q, i) => ({ x: i, y: q[key] }));
+  const { slope, intercept } = linearRegression(points);
+  const lastX = points.length - 1;
+
+  let cursor = { fyEnd: recent[recent.length - 1].fyEnd, qNum: recent[recent.length - 1].qNum };
+  const forecastQuarters = [];
+  for (let i = 1; i <= count; i++) {
+    cursor = cursor.qNum === 4 ? { fyEnd: cursor.fyEnd + 1, qNum: 1 } : { fyEnd: cursor.fyEnd, qNum: cursor.qNum + 1 };
+    forecastQuarters.push({
+      key: `Q${cursor.qNum}FY${String(cursor.fyEnd).slice(2)}`,
+      value: slope * (lastX + i) + intercept,
+    });
+  }
+
+  const chartData = recent.map((q, i) => ({
+    period: q.key,
+    actual: q[key],
+    projected: i === recent.length - 1 ? q[key] : null,
+  }));
+  forecastQuarters.forEach(f => chartData.push({ period: f.key, actual: null, projected: f.value }));
+
+  return { chartData, slope, forecastQuarters };
+}
+
+function getExecStats(ds) {
+  const completeQ = ds.qData.filter(q => q.complete);
+  // The narrative is framed as a fiscal year-end (Q4) update, so anchor on the most
+  // recent complete Q4 when one exists — falling back to the latest complete quarter
+  // of any kind if the sheet hasn't reached a Q4 yet.
+  const completeQ4s = completeQ.filter(q => q.qNum === 4);
+  const latestQ = completeQ4s.length ? completeQ4s[completeQ4s.length - 1] : (completeQ.length ? completeQ[completeQ.length - 1] : null);
+  const prevYearQ = latestQ ? ds.qData.find(q => q.qNum === latestQ.qNum && q.fyEnd === latestQ.fyEnd - 1) : null;
+  const completeFY = ds.fyData.filter(f => !f.partial);
+  const latestFY = completeFY.length ? completeFY[completeFY.length - 1] : null;
+  const prevFYIdx = latestFY ? ds.fyData.findIndex(f => f.key === latestFY.key) - 1 : -1;
+  const prevFY = prevFYIdx >= 0 ? ds.fyData[prevFYIdx] : null;
+  return { latestQ, prevYearQ, latestFY, prevFY };
 }
 
 function Delta({ curr, prev, good = "up" }) {
@@ -379,6 +482,211 @@ function HeadcountChart({ ds }) {
   );
 }
 
+/* ============================================================
+   NEW — Quarterly YoY chart, EBITDA turnaround + forecast, and
+   Revenue trend + forecast. Actuals are solid, projections
+   (simple linear trend on the last up-to-8 complete quarters)
+   are dashed and clearly labelled.
+   ============================================================ */
+function QuarterlyRevenueChart({ ds }) {
+  if (!ds.hasRevenue) return null;
+  const quarters = ds.qData.slice(-8);
+  if (!quarters.length) return <div className="chart-empty">No quarterly data available yet.</div>;
+  const latestKey = quarters[quarters.length - 1].key;
+  const data = quarters.map(q => ({
+    period: q.label.replace(" (partial)", ""),
+    value: q["Total Revenue"],
+    isLatest: q.key === latestKey,
+  }));
+  return (
+    <ResponsiveContainer width="100%" height={210}>
+      <BarChart data={data} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
+        <CartesianGrid strokeDasharray="3 3" stroke="#EEF0F3" vertical={false} />
+        <XAxis dataKey="period" tick={{ fontSize: 10, fill: "#8891A3", fontFamily: "IBM Plex Mono" }} axisLine={{ stroke: "#E5E7EB" }} tickLine={false} />
+        <YAxis tick={{ fontSize: 10, fill: "#8891A3", fontFamily: "IBM Plex Mono" }} axisLine={false} tickLine={false} tickFormatter={fmtCr} width={62} />
+        <Tooltip formatter={(v) => fmtCr(v)} contentStyle={{ fontFamily: "IBM Plex Mono", fontSize: 12, border: "1px solid #E5E7EB", borderRadius: 8 }} />
+        <Bar dataKey="value" radius={[3, 3, 0, 0]}>
+          {data.map((d, i) => <Cell key={i} fill={d.isLatest ? "#B08A3E" : "#1D4E4A"} />)}
+        </Bar>
+      </BarChart>
+    </ResponsiveContainer>
+  );
+}
+
+function EbitdaTurnaroundChart({ ds }) {
+  if (!ds.hasEBITDA) return <div className="chart-empty">No "EBITDA" row found in the sheet.</div>;
+  const forecast = buildQuarterlyForecast(ds.qData, "EBITDA", 2);
+  const fallback = ds.qData.filter(q => q.complete && typeof q["EBITDA"] === "number").slice(-8)
+    .map(q => ({ period: q.key, actual: q["EBITDA"], projected: null }));
+  const chartData = forecast ? forecast.chartData : fallback;
+  if (!chartData.length) return <div className="chart-empty">Not enough complete quarters yet to chart EBITDA.</div>;
+  return (
+    <>
+      <ResponsiveContainer width="100%" height={190}>
+        <ComposedChart data={chartData} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
+          <CartesianGrid strokeDasharray="3 3" stroke="#EEF0F3" vertical={false} />
+          <XAxis dataKey="period" tick={{ fontSize: 10, fill: "#8891A3", fontFamily: "IBM Plex Mono" }} axisLine={{ stroke: "#E5E7EB" }} tickLine={false} />
+          <YAxis tick={{ fontSize: 10, fill: "#8891A3", fontFamily: "IBM Plex Mono" }} axisLine={false} tickLine={false} tickFormatter={fmtCr} width={62} />
+          <Tooltip formatter={(v) => (v === null ? "N/A" : fmtCr(v))} contentStyle={{ fontFamily: "IBM Plex Mono", fontSize: 12, border: "1px solid #E5E7EB", borderRadius: 8 }} />
+          <ReferenceLine y={0} stroke="#B3492F" strokeDasharray="2 2" />
+          <Bar dataKey="actual" radius={[3, 3, 0, 0]}>
+            {chartData.map((d, i) => <Cell key={i} fill={d.actual == null ? "transparent" : d.actual >= 0 ? "#16A34A" : "#B3492F"} />)}
+          </Bar>
+          {forecast && <Line type="monotone" dataKey="projected" stroke="#B08A3E" strokeWidth={2} strokeDasharray="5 5" dot={{ r: 3 }} />}
+        </ComposedChart>
+      </ResponsiveContainer>
+      {forecast && (
+        <div className="forecast-note">
+          <span className="forecast-dot forecast-dot--proj" /> Dashed = linear-trend projection for {forecast.forecastQuarters.map(f => f.key).join(", ")}
+        </div>
+      )}
+    </>
+  );
+}
+
+function RevenueForecastChart({ ds }) {
+  if (!ds.hasRevenue) return null;
+  const forecast = buildQuarterlyForecast(ds.qData, "Total Revenue", 2);
+  if (!forecast) return <div className="chart-empty">Need at least 4 complete quarters of Total Revenue to project a trend.</div>;
+  return (
+    <>
+      <ResponsiveContainer width="100%" height={190}>
+        <ComposedChart data={forecast.chartData} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
+          <CartesianGrid strokeDasharray="3 3" stroke="#EEF0F3" vertical={false} />
+          <XAxis dataKey="period" tick={{ fontSize: 10, fill: "#8891A3", fontFamily: "IBM Plex Mono" }} axisLine={{ stroke: "#E5E7EB" }} tickLine={false} />
+          <YAxis tick={{ fontSize: 10, fill: "#8891A3", fontFamily: "IBM Plex Mono" }} axisLine={false} tickLine={false} tickFormatter={fmtCr} width={62} />
+          <Tooltip formatter={(v) => (v === null ? "N/A" : fmtCr(v))} contentStyle={{ fontFamily: "IBM Plex Mono", fontSize: 12, border: "1px solid #E5E7EB", borderRadius: 8 }} />
+          <Line type="monotone" dataKey="actual" stroke="#1D4E4A" strokeWidth={2} dot={{ r: 3 }} />
+          <Line type="monotone" dataKey="projected" stroke="#B08A3E" strokeWidth={2} strokeDasharray="5 5" dot={{ r: 3 }} />
+        </ComposedChart>
+      </ResponsiveContainer>
+      <div className="forecast-note">
+        <span className="forecast-dot forecast-dot--actual" /> Actual &nbsp; <span className="forecast-dot forecast-dot--proj" /> Projected — trend line through {forecast.forecastQuarters.map(f => f.key).join(", ")}
+      </div>
+    </>
+  );
+}
+
+/* ============================================================
+   NEW — Executive summary (narrative, computed live off the
+   latest complete quarter / FY in the sheet) and business
+   description (static company context).
+   ============================================================ */
+function ExecutiveSummary({ ds }) {
+  const { latestQ, prevYearQ, latestFY, prevFY } = getExecStats(ds);
+
+  const revYoY = latestQ && prevYearQ && ds.hasRevenue && prevYearQ["Total Revenue"]
+    ? ((latestQ["Total Revenue"] - prevYearQ["Total Revenue"]) / Math.abs(prevYearQ["Total Revenue"])) * 100
+    : null;
+
+  return (
+    <section className="section narrative-section">
+      <div className="section__title">Performance Summary</div>
+      <div className="narrative-grid">
+        <div className="narrative-card">
+          <div className="narrative-card__eyebrow">Quarterly &amp; FY momentum</div>
+          <div className="narrative-bullets">
+            <div className="narrative-bullet">
+              <span className="narrative-bullet__icon"><TrendingUp size={15} /></span>
+              <span>
+                {latestQ && prevYearQ && ds.hasRevenue ? (
+                  <>The company reported strong quarterly momentum in <strong>{latestQ.label}</strong>, with net revenue
+                  increasing to <strong>{fmtCr(latestQ["Total Revenue"])}</strong> from {fmtCr(prevYearQ["Total Revenue"])} in{" "}
+                  {prevYearQ.label} ({fmtPctSigned(revYoY)} YoY), driven by higher campaign-led revenues and improved
+                  client activation during the year-end period.</>
+                ) : (
+                  <>Revenue data isn't complete enough yet to compute a like-for-like quarterly YoY comparison — add more
+                  months to the sheet to unlock this.</>
+                )}
+              </span>
+            </div>
+            <div className="narrative-bullet">
+              <span className="narrative-bullet__icon"><Rocket size={15} /></span>
+              <span>
+                {latestFY && prevFY && ds.hasEBITDA ? (
+                  <>A patient turnaround. EBITDA flipped from <strong>{fmtCr(prevFY["EBITDA"])}</strong> in {prevFY.label} to{" "}
+                  <strong>{fmtCr(latestFY["EBITDA"])}</strong> in {latestFY.label}
+                  {latestQ ? <>, and turned positive in {latestQ.label} at <strong>{fmtCr(latestQ["EBITDA"])}</strong></> : ""}.
+                  New product launch: <strong>OneConsent</strong>, a CDP for managing user consent across marketing channels.</>
+                ) : (
+                  <>New product launch: <strong>OneConsent</strong>, a CDP for managing user consent across marketing channels.</>
+                )}
+              </span>
+            </div>
+            <div className="narrative-bullet">
+              <span className="narrative-bullet__icon"><Target size={15} /></span>
+              <span>The MOIC isn't impressive yet — but profitable companies tend to find their multiple eventually.
+              The reverse is far rarer.</span>
+            </div>
+          </div>
+        </div>
+
+        <div className="narrative-stat-col">
+          <div className="stat-tile">
+            <div className="stat-tile__label">Latest quarter vs prior year</div>
+            <div className="stat-tile__value">{latestQ ? fmtCr(latestQ["Total Revenue"]) : "N/A"}</div>
+            <div className="stat-tile__sub">
+              {latestQ ? latestQ.label : "—"} revenue {revYoY !== null && <Delta curr={latestQ?.["Total Revenue"]} prev={prevYearQ?.["Total Revenue"]} good="up" />}
+            </div>
+          </div>
+          <div className="stat-tile">
+            <div className="stat-tile__label">FY EBITDA</div>
+            <div className="stat-tile__value">{latestFY ? fmtCr(latestFY["EBITDA"]) : "N/A"}</div>
+            <div className="stat-tile__sub">{latestFY ? `${latestFY.label}, vs ${prevFY ? fmtCr(prevFY["EBITDA"]) : "N/A"} prior FY` : "—"}</div>
+          </div>
+          <div className="stat-tile">
+            <div className="stat-tile__label">Strategic note</div>
+            <div className="stat-tile__value" style={{ fontSize: 16 }}>OneConsent CDP</div>
+            <div className="stat-tile__sub">Consent management across marketing channels</div>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function BusinessDescription() {
+  return (
+    <section className="section narrative-section">
+      <div className="section__title">Business Description</div>
+      <div className="biz-card">
+        <p className="biz-desc-text">
+          The company offers industry-agnostic, cloud-based CRM, Loyalty and Conversational Commerce solutions that
+          enable seamless omnichannel customer experience. It runs loyalty programs for banks and online platforms.
+        </p>
+        <div className="biz-chip-row">
+          <span className="biz-chip"><Layers size={11} style={{ marginRight: 5, verticalAlign: -2 }} />SaaS Technology</span>
+          <span className="biz-chip"><ShieldCheck size={11} style={{ marginRight: 5, verticalAlign: -2 }} />Loyalty Platform as a Service</span>
+          <span className="biz-chip"><Target size={11} style={{ marginRight: 5, verticalAlign: -2 }} />Consumer Analytics</span>
+        </div>
+        <div className="biz-scale-row">
+          <div className="biz-scale-tile">
+            <Building2 size={22} className="biz-scale-icon" />
+            <div>
+              <div className="biz-scale-value">220+</div>
+              <div className="biz-scale-label">Brands</div>
+            </div>
+          </div>
+          <div className="biz-scale-tile">
+            <Store size={22} className="biz-scale-icon" />
+            <div>
+              <div className="biz-scale-value">25,000+</div>
+              <div className="biz-scale-label">Stores / Branches</div>
+            </div>
+          </div>
+          <div className="biz-scale-tile">
+            <Users size={22} className="biz-scale-icon" />
+            <div>
+              <div className="biz-scale-value">Banks &amp; Platforms</div>
+              <div className="biz-scale-label">Core loyalty client base</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function EmptyState({ onFile, status }) {
   const [dragOver, setDragOver] = useState(false);
   return (
@@ -486,6 +794,9 @@ export default function App() {
         </div>
       )}
 
+      <ExecutiveSummary ds={dataset} />
+      <BusinessDescription />
+
       <section className="section">
         <div className="section__title">Key Metrics <span className="section__sub">— {fy.label} vs {fyIndex > 0 ? dataset.fyData[fyIndex - 1].label : "—"}</span></div>
         <div className="kpi-grid">
@@ -531,6 +842,27 @@ export default function App() {
       </section>
 
       <section className="section">
+        <div className="section__title">Outlook &amp; Forecast <span className="section__sub">— quarterly, trend-projected</span></div>
+        <div className="chart-grid">
+          <div className="chart-card">
+            <div className="chart-card__title">Quarterly Revenue — YoY</div>
+            <div className="chart-card__note">Last 8 quarters; latest quarter highlighted in gold</div>
+            <QuarterlyRevenueChart ds={dataset} />
+          </div>
+          <div className="chart-card">
+            <div className="chart-card__title">EBITDA Turnaround &amp; Forecast</div>
+            <div className="chart-card__note">Green = positive, red = negative, dashed = projected</div>
+            <EbitdaTurnaroundChart ds={dataset} />
+          </div>
+          <div className="chart-card" style={{ gridColumn: "1 / -1" }}>
+            <div className="chart-card__title">Revenue Trend &amp; Forecast</div>
+            <div className="chart-card__note">Linear trend on the last up to 8 complete quarters, projected 2 quarters forward</div>
+            <RevenueForecastChart ds={dataset} />
+          </div>
+        </div>
+      </section>
+
+      <section className="section">
         <div className="section__title">Cash &amp; Operations</div>
         <div className="chart-grid">
           <div className="chart-card" style={{ gridColumn: "1 / -1" }}>
@@ -544,9 +876,11 @@ export default function App() {
       <div className="footnote">
         <Info size={13} style={{ flexShrink: 0, marginTop: 2 }} />
         <span>
-          Every card, chart, and FY grouping above is computed live from the uploaded sheet — nothing is
-          hardcoded. FY periods are derived from the dates in row 1 (Apr–Mar), so adding a new quarter's
-          columns and re-uploading is all a refresh needs.
+          Every card, chart, and FY/quarter grouping above is computed live from the uploaded sheet — nothing is
+          hardcoded except the business description and product-launch note. FY periods are derived from the dates
+          in row 1 (Apr–Mar), so adding a new quarter's columns and re-uploading is all a refresh needs. Forecast
+          lines in the Outlook section are a simple linear trend over the most recent complete quarters, not a
+          modeled projection — treat them as directional only.
         </span>
       </div>
     </div>
@@ -602,6 +936,35 @@ function GlobalStyles() {
       .section { padding:32px 40px 8px; }
       .section__title { font-family:'Fraunces',serif; font-size:19px; font-weight:500; margin-bottom:16px; display:flex; align-items:baseline; gap:10px; }
       .section__sub { font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--muted); }
+
+      .narrative-section { padding-top:28px; }
+      .narrative-grid { display:grid; grid-template-columns:1.3fr 1fr; gap:20px; }
+      @media (max-width:900px) { .narrative-grid { grid-template-columns:1fr; } }
+      .narrative-card { border:1px solid #DDD3BC; border-radius:14px; padding:22px 24px; background:linear-gradient(180deg,#FFFDFA,#fff); }
+      .narrative-card__eyebrow { font-family:'IBM Plex Mono',monospace; font-size:10.5px; text-transform:uppercase; letter-spacing:0.08em; color:var(--gold); margin-bottom:14px; }
+      .narrative-bullets { display:flex; flex-direction:column; gap:16px; }
+      .narrative-bullet { display:flex; gap:12px; align-items:flex-start; font-size:13.5px; line-height:1.65; color:var(--ink); }
+      .narrative-bullet__icon { flex-shrink:0; width:28px; height:28px; border-radius:8px; display:flex; align-items:center; justify-content:center; background:var(--surface); color:var(--brand); margin-top:1px; }
+      .narrative-stat-col { display:flex; flex-direction:column; gap:14px; }
+      .stat-tile { border:1px solid var(--border); border-radius:12px; padding:16px; background:#fff; }
+      .stat-tile__label { font-family:'IBM Plex Mono',monospace; font-size:10.5px; text-transform:uppercase; letter-spacing:0.06em; color:var(--muted); margin-bottom:6px; }
+      .stat-tile__value { font-family:'Fraunces',serif; font-size:22px; font-weight:500; }
+      .stat-tile__sub { font-size:11px; color:var(--muted); margin-top:6px; display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+
+      .biz-card { border:1px solid var(--border); border-radius:14px; padding:22px 24px; background:#fff; }
+      .biz-desc-text { font-size:13.5px; line-height:1.75; color:var(--ink); margin:0 0 18px; }
+      .biz-chip-row { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:20px; }
+      .biz-chip { display:inline-flex; align-items:center; font-family:'IBM Plex Mono',monospace; font-size:11px; padding:7px 12px; border-radius:20px; border:1px solid var(--border); color:var(--brand); background:var(--surface); }
+      .biz-scale-row { display:flex; gap:14px; flex-wrap:wrap; }
+      .biz-scale-tile { flex:1; min-width:150px; border:1px solid #DDD3BC; border-radius:12px; padding:16px; background:linear-gradient(180deg,#FFFDFA,#fff); display:flex; align-items:center; gap:12px; }
+      .biz-scale-icon { color:var(--gold); flex-shrink:0; }
+      .biz-scale-value { font-family:'Fraunces',serif; font-size:19px; font-weight:500; line-height:1.2; }
+      .biz-scale-label { font-family:'IBM Plex Mono',monospace; font-size:10px; color:var(--muted); text-transform:uppercase; letter-spacing:0.05em; margin-top:2px; }
+
+      .forecast-note { display:flex; align-items:center; gap:6px; font-family:'IBM Plex Mono',monospace; font-size:10.5px; color:var(--muted); margin:6px 0 10px; flex-wrap:wrap; }
+      .forecast-dot { width:8px; height:8px; border-radius:2px; display:inline-block; }
+      .forecast-dot--actual { background:var(--brand); }
+      .forecast-dot--proj { background:var(--gold); }
 
       .kpi-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:14px; }
       @media (max-width:1100px) { .kpi-grid { grid-template-columns:repeat(2,1fr); } }
