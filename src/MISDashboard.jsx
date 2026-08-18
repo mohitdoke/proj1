@@ -106,6 +106,145 @@ function parseCompanyInfo(wb) {
   return { companyName, description, tags, scaleMetrics, strategicNote };
 }
 
+/* ============================================================
+   NEWS FEED — optional "News Feed" sheet. One row per news item,
+   flat columns. Populated by a separate, independent research
+   pipeline (not the Excel financial pipeline) — see the sheet's
+   Read Me notes. Every item must already carry a real source;
+   there is no fabrication path here, only parsing of whatever
+   the sheet contains.
+   ============================================================ */
+const NEWS_COLUMNS = [
+  "Title", "Summary", "Category", "Published Date", "Source Name", "Source URL", "Source Tier",
+  "Secondary Source Name", "Secondary Source URL", "Tags",
+];
+
+function parseNewsSheet(wb) {
+  const sheetName = wb.SheetNames.find(n => /news\s*feed/i.test(n));
+  if (!sheetName) return null;
+  const ws = wb.Sheets[sheetName];
+  const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: null });
+  if (rows.length < 2) return [];
+
+  const header = rows[0].map(h => (h == null ? "" : String(h).trim()));
+  const col = {};
+  NEWS_COLUMNS.forEach(name => { col[name] = header.indexOf(name); });
+
+  const items = [];
+  for (let r = 1; r < rows.length; r++) {
+    const row = rows[r];
+    if (!row) continue;
+    const title = col["Title"] >= 0 ? row[col["Title"]] : null;
+    if (!title || !String(title).trim()) continue;
+    const get = (name) => (col[name] >= 0 && row[col[name]] != null ? String(row[col[name]]).trim() : "");
+    const rawDate = col["Published Date"] >= 0 ? row[col["Published Date"]] : null;
+    let publishedAt = null;
+    if (rawDate instanceof Date) publishedAt = rawDate;
+    else if (typeof rawDate === "number") publishedAt = excelSerialToDate(rawDate);
+    else if (typeof rawDate === "string" && rawDate.trim()) {
+      const d = new Date(rawDate);
+      if (!isNaN(d)) publishedAt = d;
+    }
+    const sourceName = get("Source Name");
+    const sourceUrl = get("Source URL");
+    if (!sourceName || !sourceUrl) continue; // no unsourced items, ever
+
+    items.push({
+      title: String(title).trim(),
+      summary: get("Summary"),
+      category: get("Category") || "Company",
+      publishedAt,
+      sourceName,
+      sourceUrl,
+      sourceTier: get("Source Tier") || "N/A",
+      secondarySourceName: get("Secondary Source Name") || null,
+      secondarySourceUrl: get("Secondary Source URL") || null,
+      tags: get("Tags") ? get("Tags").split(",").map(t => t.trim()).filter(Boolean) : [],
+    });
+  }
+  items.sort((a, b) => (b.publishedAt?.getTime() || 0) - (a.publishedAt?.getTime() || 0));
+  return items;
+}
+
+/* ============================================================
+   INDUSTRY DATA — optional "Industry Data" sheet. Long/tidy
+   format: Section | Item | Field | Value. Rows are grouped by
+   (Section, Item) into objects, so very different card shapes
+   (a snapshot metric vs. a competitor's capability matrix vs. an
+   analysis note) can share one flat sheet. Same "sheet missing or
+   incomplete = simply not rendered" contract as Company Info.
+   ============================================================ */
+function parseIndustrySheet(wb) {
+  const sheetName = wb.SheetNames.find(n => /industry\s*data/i.test(n));
+  if (!sheetName) return null;
+  const ws = wb.Sheets[sheetName];
+  const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: null });
+  if (rows.length < 2) return null;
+
+  const header = rows[0].map(h => (h == null ? "" : String(h).trim()));
+  const iSection = header.indexOf("Section"), iItem = header.indexOf("Item"),
+        iField = header.indexOf("Field"), iValue = header.indexOf("Value");
+  if (iSection < 0 || iItem < 0 || iField < 0 || iValue < 0) return null;
+
+  // group into { [section]: { [item]: { [field]: value } } }
+  const grouped = {};
+  for (let r = 1; r < rows.length; r++) {
+    const row = rows[r];
+    if (!row) continue;
+    const section = row[iSection] != null ? String(row[iSection]).trim() : "";
+    const item = row[iItem] != null ? String(row[iItem]).trim() : "";
+    const field = row[iField] != null ? String(row[iField]).trim() : "";
+    const value = row[iValue] != null ? String(row[iValue]).trim() : "";
+    if (!section || !item || !field || !value) continue;
+    grouped[section] = grouped[section] || {};
+    grouped[section][item] = grouped[section][item] || {};
+    grouped[section][item][field] = value;
+  }
+  if (!Object.keys(grouped).length) return null;
+
+  const asList = (section) => Object.values(grouped[section] || {});
+
+  const overview = grouped["Overview"] || {};
+  const overviewDescription = overview["Description"]?.Text || null;
+  const categories = Object.entries(overview)
+    .filter(([item]) => item !== "Description")
+    .map(([, f]) => f)
+    .filter(f => f.Name);
+
+  const snapshot = asList("Snapshot").filter(f => f.Metric);
+  const trends = asList("Trend").filter(f => f.Title);
+  const competitors = Object.entries(grouped["Competitor"] || {}).map(([name, f]) => ({ name, ...f }));
+  const analysis = asList("Analysis").filter(f => f.Text);
+  const methodology = grouped["Methodology"]?.["Note"]?.Text || null;
+
+  if (!overviewDescription && !categories.length && !snapshot.length && !trends.length && !competitors.length && !analysis.length) {
+    return null;
+  }
+  return { overviewDescription, categories, snapshot, trends, competitors, analysis, methodology };
+}
+
+/* Optional "Data Refresh" sheet — two Field | Value rows telling the UI when
+   the independent research pipeline last updated each of the two Phase 2
+   sections. Purely informational; absence just means the timestamp isn't shown. */
+function parseRefreshMeta(wb) {
+  const sheetName = wb.SheetNames.find(n => /data\s*refresh/i.test(n));
+  if (!sheetName) return null;
+  const ws = wb.Sheets[sheetName];
+  const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: null });
+  const map = {};
+  rows.forEach(row => {
+    if (!row || row[0] == null) return;
+    const key = String(row[0]).trim();
+    const val = row[1] != null ? String(row[1]).trim() : "";
+    if (key && val) map[key] = val;
+  });
+  if (!map["News Last Refreshed"] && !map["Industry Last Refreshed"]) return null;
+  return {
+    newsRefreshedAt: map["News Last Refreshed"] || null,
+    industryRefreshedAt: map["Industry Last Refreshed"] || null,
+  };
+}
+
 function buildFYGroups(months) {
   const order = [];
   const byEndYear = {};
@@ -795,15 +934,296 @@ function ProfitAndLossTable({ ds }) {
   );
 }
 
-function PlaceholderSection({ title, note }) {
+function PlaceholderSection({ title, note, eyebrow = "Coming next" }) {
   return (
     <section className="section">
       <div className="placeholder-page">
-        <div className="placeholder-page__eyebrow">Coming next</div>
+        <div className="placeholder-page__eyebrow">{eyebrow}</div>
         <div className="placeholder-page__title">{title}</div>
         <div className="placeholder-page__note">{note}</div>
       </div>
     </section>
+  );
+}
+
+/* ============================================================
+   PHASE 2 — Industry & Competitors, News & Updates. Both read
+   from optional sheets ("Industry Data", "News Feed") parsed
+   above, populated by an independent research pipeline (not the
+   Excel financial pipeline — see parseNewsSheet/parseIndustrySheet).
+   Every fact rendered here carries its own embedded source link;
+   nothing is generated from model knowledge at render time.
+   ============================================================ */
+function fmtDate(d) {
+  if (!d) return "N/A";
+  const date = d instanceof Date ? d : new Date(d);
+  if (isNaN(date)) return typeof d === "string" ? d : "N/A";
+  return date.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
+}
+
+function SourceLink({ name, url }) {
+  if (!url || !name) return null;
+  return (
+    <a className="src-link" href={url} target="_blank" rel="noopener noreferrer">
+      {name}<span className="src-link__arrow">↗</span>
+    </a>
+  );
+}
+
+function CapabilityMark({ value }) {
+  const v = (value || "").trim();
+  if (v === "✓" || /^y(es)?$/i.test(v)) return <span className="cap-mark cap-mark--yes">✓</span>;
+  if (v === "—" || v === "-" || /^no?t?$/i.test(v)) return <span className="cap-mark cap-mark--no">—</span>;
+  return <span className="cap-mark cap-mark--na">N/A</span>;
+}
+
+const NEWS_CATEGORY_ORDER = ["Company", "Product & Launches", "Partnerships", "Funding & Financial", "Leadership", "Events", "Industry"];
+const NEWS_DATE_RANGES = [
+  { key: "7d", label: "Last 7 Days", days: 7 },
+  { key: "30d", label: "Last 30 Days", days: 30 },
+  { key: "90d", label: "Last 90 Days", days: 90 },
+  { key: "1y", label: "Last 1 Year", days: 365 },
+  { key: "all", label: "All", days: Infinity },
+];
+
+function NewsCard({ item }) {
+  return (
+    <div className="news-card">
+      <div className="news-card__top">
+        <span className="news-card__category">{item.category}</span>
+        <span className="news-card__date">{fmtDate(item.publishedAt)}</span>
+      </div>
+      <div className="news-card__title">{item.title}</div>
+      {item.summary && <div className="news-card__summary">{item.summary}</div>}
+      <div className="news-card__sources">
+        <SourceLink name={item.sourceName} url={item.sourceUrl} />
+        {item.secondarySourceUrl && <SourceLink name={item.secondarySourceName || "Additional source"} url={item.secondarySourceUrl} />}
+      </div>
+    </div>
+  );
+}
+
+function NewsUpdatesPage({ ds }) {
+  const [category, setCategory] = useState("All");
+  const [range, setRange] = useState("90d");
+  const feed = ds.newsFeed;
+
+  if (feed === null) {
+    return (
+      <PlaceholderSection
+        eyebrow="Not yet populated"
+        title="News & Updates"
+        note={'This section is populated by an independent daily research pipeline that writes a "News Feed" sheet into the mastersheet — this upload doesn\'t include one yet. Upload a workbook that has it, via "New upload" above, to see it here.'}
+      />
+    );
+  }
+
+  const now = new Date();
+  const rangeDef = NEWS_DATE_RANGES.find(r => r.key === range);
+  const inRange = (list, days) => list.filter(f => {
+    if (category !== "All" && f.category !== category) return false;
+    if (!f.publishedAt) return true;
+    return (now - f.publishedAt) / 86400000 <= days;
+  });
+
+  let filtered = inRange(feed, rangeDef.days);
+  let expandedNote = null;
+  if (filtered.length < 3 && rangeDef.key !== "all") {
+    const wider = NEWS_DATE_RANGES.slice(NEWS_DATE_RANGES.findIndex(r => r.key === range) + 1);
+    for (const w of wider) {
+      const candidate = inRange(feed, w.days);
+      if (candidate.length > filtered.length) {
+        filtered = candidate;
+        expandedNote = `Showing "${w.label}" instead — not enough items in the selected window.`;
+      }
+      if (candidate.length >= 3) break;
+    }
+  }
+
+  const categoriesPresent = NEWS_CATEGORY_ORDER.filter(c => feed.some(f => f.category === c));
+  const refreshedAt = ds.refreshMeta?.newsRefreshedAt;
+
+  return (
+    <section className="section">
+      <div className="fin-section__head">
+        <div className="section__title">News &amp; Updates</div>
+        <div className="news-refresh">
+          {refreshedAt && <span className="news-refresh__stamp">● Last refreshed: {refreshedAt}</span>}
+          <span className="news-refresh__note">Refreshes automatically once a day; re-upload to pick up the latest run.</span>
+        </div>
+      </div>
+
+      <div className="news-filters">
+        <div className="news-filters__group">
+          <button className={`chip ${category === "All" ? "chip--active" : ""}`} onClick={() => setCategory("All")}>All</button>
+          {categoriesPresent.map(c => (
+            <button key={c} className={`chip ${category === c ? "chip--active" : ""}`} onClick={() => setCategory(c)}>{c}</button>
+          ))}
+        </div>
+        <div className="news-filters__group">
+          {NEWS_DATE_RANGES.map(r => (
+            <button key={r.key} className={`chip chip--mono ${range === r.key ? "chip--active" : ""}`} onClick={() => setRange(r.key)}>{r.label}</button>
+          ))}
+        </div>
+      </div>
+
+      {expandedNote && <div className="news-expanded-note">{expandedNote}</div>}
+
+      {filtered.length ? (
+        <div className="news-grid">
+          {filtered.map((item, i) => <NewsCard key={`${item.title}-${i}`} item={item} />)}
+        </div>
+      ) : (
+        <div className="chart-empty">No relevant verified updates found for this filter.</div>
+      )}
+    </section>
+  );
+}
+
+function IndustryCompetitorsPage({ ds }) {
+  const data = ds.industryData;
+
+  if (data === null) {
+    return (
+      <PlaceholderSection
+        eyebrow="Not yet populated"
+        title="Industry & Competitors"
+        note={'This section is populated by an independent research pipeline that writes an "Industry Data" sheet into the mastersheet — this upload doesn\'t include one yet. Upload a workbook that has it, via "New upload" above, to see it here.'}
+      />
+    );
+  }
+
+  const capabilityCols = ["CRM", "Loyalty", "CDP", "Marketing Automation", "Conversational Commerce"];
+  const refreshedAt = ds.refreshMeta?.industryRefreshedAt;
+
+  return (
+    <>
+      <section className="section">
+        <div className="fin-section__head">
+          <div className="section__title">Industry &amp; Competitors</div>
+          {refreshedAt && <span className="news-refresh__stamp">● Data refreshed: {refreshedAt}</span>}
+        </div>
+
+        {data.overviewDescription && <p className="biz-desc-text" style={{ marginBottom: 16 }}>{data.overviewDescription}</p>}
+
+        {data.categories.length > 0 && (
+          <div className="biz-chip-row" style={{ marginBottom: 8 }}>
+            {data.categories.map(c => (
+              <span className="biz-chip" key={c.Name}>
+                {c.Name}
+                {c.SourceUrl && <> · <SourceLink name={c.SourceName || "source"} url={c.SourceUrl} /></>}
+              </span>
+            ))}
+          </div>
+        )}
+      </section>
+
+      {data.snapshot.length > 0 && (
+        <section className="section">
+          <div className="section__title">Industry Snapshot</div>
+          <div className="snapshot-grid">
+            {data.snapshot.map(m => (
+              <div className="snapshot-tile" key={m.Metric}>
+                <div className="snapshot-tile__label">{m.Metric}</div>
+                <div className="snapshot-tile__value">{m.Value}</div>
+                <div className="snapshot-tile__meta">
+                  <span className="snapshot-tile__period">{m.Period}</span>
+                  <SourceLink name={m.SourceName} url={m.SourceUrl} />
+                </div>
+                {m.Note && <div className="snapshot-tile__note">{m.Note}</div>}
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {data.trends.length > 0 && (
+        <section className="section">
+          <div className="section__title">Industry Trends</div>
+          <div className="chart-grid">
+            {data.trends.map(t => (
+              <div className="chart-card trend-card" key={t.Title}>
+                <div className="chart-card__title">{t.Title}</div>
+                {t.Description && <p className="trend-card__desc">{t.Description}</p>}
+                {t.WhyItMatters && (
+                  <div className="trend-card__why">
+                    <span className="trend-card__why-label">Why it matters</span>
+                    {t.WhyItMatters}
+                  </div>
+                )}
+                <div className="trend-card__foot">
+                  <SourceLink name={t.SourceName} url={t.SourceUrl} />
+                  {t.PublishedAt && <span className="trend-card__date">{t.PublishedAt}</span>}
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {data.competitors.length > 0 && (
+        <section className="section">
+          <div className="section__title">Competitive Landscape</div>
+          <div className="fin-table-wrap">
+            <table className="fin-table fin-table--competitors">
+              <thead>
+                <tr>
+                  <th className="fin-table__label-col">Company</th>
+                  <th>Primary Focus</th>
+                  {capabilityCols.map(c => <th key={c}>{c}</th>)}
+                  <th>Geography</th>
+                  <th>Source</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.competitors.map(c => (
+                  <tr key={c.name}>
+                    <td className="fin-table__label-col">{c.name}</td>
+                    <td style={{ textAlign: "left" }}>{c.PrimaryFocus || "N/A"}</td>
+                    <td><CapabilityMark value={c.CRM} /></td>
+                    <td><CapabilityMark value={c.Loyalty} /></td>
+                    <td><CapabilityMark value={c.CDP} /></td>
+                    <td><CapabilityMark value={c["MarketingAutomation"]} /></td>
+                    <td><CapabilityMark value={c["ConversationalCommerce"]} /></td>
+                    <td style={{ textAlign: "left" }}>{c.Geography || "N/A"}</td>
+                    <td><SourceLink name={c.SourceName || "source"} url={c.SourceUrl} /></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {data.competitors.some(c => c.RelevanceNote) && (
+            <div className="competitor-notes">
+              {data.competitors.filter(c => c.RelevanceNote).map(c => (
+                <div className="competitor-notes__item" key={c.name}><strong>{c.name}:</strong> {c.RelevanceNote}</div>
+              ))}
+            </div>
+          )}
+        </section>
+      )}
+
+      {data.analysis.length > 0 && (
+        <section className="section">
+          <div className="section__title">Company vs. Competitors <span className="section__sub">— dashboard analysis</span></div>
+          <div className="analysis-list">
+            {data.analysis.map((a, i) => (
+              <div className="analysis-item" key={i}>
+                <span className="analysis-item__badge">Dashboard analysis</span>
+                <span>{a.Text}</span>
+                {a.SourceUrl && <SourceLink name={a.SourceName || "supporting source"} url={a.SourceUrl} />}
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {data.methodology && (
+        <div className="footnote">
+          <Info size={13} style={{ flexShrink: 0, marginTop: 2 }} />
+          <span>{data.methodology}</span>
+        </div>
+      )}
+    </>
   );
 }
 
@@ -1025,7 +1445,17 @@ export default function App() {
       const wb = XLSX.read(buf, { type: "array", cellDates: true });
       const parsed = parseWorkbook(wb);
       const companyInfo = parseCompanyInfo(wb);
+      // News Feed / Industry Data are a separate, independent pipeline from the
+      // financial Monthly Data parse above — a missing or malformed sheet here
+      // must never affect Performance section parsing.
+      let newsFeed = null, industryData = null, refreshMeta = null;
+      try { newsFeed = parseNewsSheet(wb); } catch { newsFeed = null; }
+      try { industryData = parseIndustrySheet(wb); } catch { industryData = null; }
+      try { refreshMeta = parseRefreshMeta(wb); } catch { refreshMeta = null; }
       const ds = buildDataset(parsed, companyInfo);
+      ds.newsFeed = newsFeed;
+      ds.industryData = industryData;
+      ds.refreshMeta = refreshMeta;
       setDataset(ds);
       setFyIndex(ds.fyData.length - 1);
       setFileName(file.name);
@@ -1191,19 +1621,9 @@ export default function App() {
         </>
       )}
 
-      {section === "industry" && (
-        <PlaceholderSection
-          title="Industry & Competitors"
-          note="Sector overview, market context, and competitive positioning will land here in a later phase."
-        />
-      )}
+      {section === "industry" && <IndustryCompetitorsPage ds={dataset} />}
 
-      {section === "news" && (
-        <PlaceholderSection
-          title="News & Updates"
-          note="Product launches, partnerships, funding events, and other externally sourced updates will land here in a later phase."
-        />
-      )}
+      {section === "news" && <NewsUpdatesPage ds={dataset} />}
     </div>
   );
 }
@@ -1387,6 +1807,66 @@ function GlobalStyles() {
       .fin-table__subtotal-row td { font-weight:600; border-top:1px solid var(--border); }
       .fin-table__subtotal-row td.fin-table__label-col { background:#fff; }
       .fin-table .delta { font-size:11px; padding:2px 6px; justify-content:flex-end; }
+
+      /* ---- source links (used throughout Industry & Competitors / News) ---- */
+      .src-link { display:inline-flex; align-items:center; gap:2px; font-family:'IBM Plex Mono',monospace; font-size:11px;
+                  color:var(--brand); text-decoration:none; border-bottom:1px dotted var(--brand); white-space:nowrap; }
+      .src-link:hover { color:var(--gold); border-bottom-color:var(--gold); }
+      .src-link__arrow { font-size:10px; }
+
+      /* ---- News & Updates ---- */
+      .news-refresh { display:flex; flex-direction:column; align-items:flex-end; gap:2px; font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--muted); }
+      .news-refresh__stamp { color:var(--brand); font-weight:600; }
+      .news-refresh__note { color:var(--muted); }
+      .news-filters { display:flex; flex-direction:column; gap:8px; margin-bottom:18px; }
+      .news-filters__group { display:flex; gap:6px; flex-wrap:wrap; }
+      .chip { font-family:'Inter',sans-serif; font-size:12px; padding:6px 12px; border-radius:20px; border:1px solid var(--border);
+              background:#fff; color:var(--muted); cursor:pointer; transition:all .15s; white-space:nowrap; }
+      .chip--mono { font-family:'IBM Plex Mono',monospace; font-size:11px; }
+      .chip:hover { border-color:var(--brand); color:var(--brand); }
+      .chip--active { background:var(--brand); border-color:var(--brand); color:#fff; }
+      .news-expanded-note { font-size:12px; color:var(--gold); margin-bottom:14px; font-style:italic; }
+      .news-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(300px, 1fr)); gap:14px; }
+      .news-card { border:1px solid var(--border); border-radius:12px; padding:16px 18px; background:#fff; display:flex; flex-direction:column; gap:8px; }
+      .news-card__top { display:flex; justify-content:space-between; align-items:center; gap:8px; }
+      .news-card__category { font-family:'IBM Plex Mono',monospace; font-size:10px; text-transform:uppercase; letter-spacing:0.05em;
+                              color:var(--brand); background:var(--surface); padding:3px 8px; border-radius:6px; }
+      .news-card__date { font-family:'IBM Plex Mono',monospace; font-size:10.5px; color:var(--muted); }
+      .news-card__title { font-family:'Fraunces',serif; font-size:16px; font-weight:500; line-height:1.35; }
+      .news-card__summary { font-size:12.5px; color:var(--muted); line-height:1.55; }
+      .news-card__sources { display:flex; gap:12px; flex-wrap:wrap; margin-top:auto; padding-top:6px; }
+
+      /* ---- Industry & Competitors ---- */
+      .snapshot-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(220px, 1fr)); gap:14px; }
+      .snapshot-tile { border:1px solid var(--border); border-radius:12px; padding:16px; background:#fff; }
+      .snapshot-tile__label { font-size:12px; color:var(--muted); font-weight:500; margin-bottom:8px; }
+      .snapshot-tile__value { font-family:'Fraunces',serif; font-size:22px; font-weight:500; margin-bottom:8px; }
+      .snapshot-tile__meta { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+      .snapshot-tile__period { font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--gold); background:#F6F1E4; padding:2px 7px; border-radius:6px; }
+      .snapshot-tile__note { font-size:11.5px; color:var(--muted); margin-top:8px; line-height:1.5; }
+
+      .trend-card { display:flex; flex-direction:column; }
+      .trend-card__desc { font-size:12.5px; color:var(--ink); line-height:1.6; margin:4px 0 10px; }
+      .trend-card__why { font-size:12px; color:var(--muted); line-height:1.55; background:var(--surface); border-radius:8px; padding:10px 12px; margin-bottom:10px; }
+      .trend-card__why-label { display:block; font-family:'IBM Plex Mono',monospace; font-size:10px; text-transform:uppercase; letter-spacing:0.05em; color:var(--brand); margin-bottom:4px; }
+      .trend-card__foot { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-top:auto; }
+      .trend-card__date { font-family:'IBM Plex Mono',monospace; font-size:10.5px; color:var(--muted); }
+
+      .cap-mark { font-weight:600; }
+      .cap-mark--yes { color:var(--pos); }
+      .cap-mark--no { color:var(--muted); }
+      .cap-mark--na { color:var(--muted); font-size:10px; font-family:'IBM Plex Mono',monospace; }
+      .fin-table--competitors td, .fin-table--competitors th { text-align:center; }
+      .fin-table--competitors td.fin-table__label-col, .fin-table--competitors th.fin-table__label-col { text-align:left; }
+
+      .competitor-notes { margin-top:12px; display:flex; flex-direction:column; gap:6px; }
+      .competitor-notes__item { font-size:12px; color:var(--muted); line-height:1.6; }
+
+      .analysis-list { display:flex; flex-direction:column; gap:10px; }
+      .analysis-item { display:flex; align-items:flex-start; gap:10px; flex-wrap:wrap; font-size:13px; line-height:1.6;
+                        border:1px solid var(--border); border-radius:10px; padding:12px 14px; background:#fff; }
+      .analysis-item__badge { flex-shrink:0; font-family:'IBM Plex Mono',monospace; font-size:9.5px; text-transform:uppercase; letter-spacing:0.05em;
+                               color:var(--gold); background:#F6F1E4; padding:3px 8px; border-radius:6px; }
     `}</style>
   );
 }
