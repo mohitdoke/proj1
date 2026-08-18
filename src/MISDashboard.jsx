@@ -64,6 +64,48 @@ function parseWorkbook(wb) {
   return { sheetName, months, kpis, headcount };
 }
 
+/* ============================================================
+   COMPANY INFO — optional "Company Info" sheet. Simple Field |
+   Value rows (no header). Every field is optional; anything
+   missing is simply not rendered. This is what makes the
+   Business Description section and the masthead company name
+   work for any company that uploads a sheet.
+   ============================================================ */
+function parseCompanyInfo(wb) {
+  const sheetName = wb.SheetNames.find(n => /company\s*info/i.test(n));
+  if (!sheetName) return null;
+  const ws = wb.Sheets[sheetName];
+  const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: null });
+
+  const map = {};
+  rows.forEach(row => {
+    if (!row || row[0] == null) return;
+    const key = String(row[0]).trim();
+    const val = row[1] != null ? String(row[1]).trim() : "";
+    if (key && val) map[key] = val;
+  });
+  if (!Object.keys(map).length) return null;
+
+  const companyName = map["Company Name"] || null;
+  const description = map["Business Description"] || null;
+  const tags = [1, 2, 3, 4].map(i => map[`Tag ${i}`]).filter(Boolean);
+  const scaleMetrics = [1, 2, 3].map(i => {
+    const label = map[`Scale Metric ${i} Label`];
+    const value = map[`Scale Metric ${i} Value`];
+    return label && value ? { label, value } : null;
+  }).filter(Boolean);
+  const strategicNote = map["Strategic Note Value"]
+    ? {
+        label: map["Strategic Note Label"] || "Strategic note",
+        value: map["Strategic Note Value"],
+        sub: map["Strategic Note Sub"] || "",
+      }
+    : null;
+
+  if (!companyName && !description && !tags.length && !scaleMetrics.length && !strategicNote) return null;
+  return { companyName, description, tags, scaleMetrics, strategicNote };
+}
+
 function buildFYGroups(months) {
   const order = [];
   const byEndYear = {};
@@ -117,12 +159,15 @@ function buildQuarterGroups(months) {
   });
 }
 
+/* Universal KPI ordering only — company-specific revenue sub-lines (e.g. a
+   particular company's "Banking Revenue" row) aren't listed here on purpose,
+   so any company's sheet sorts sensibly without code changes; they fall back
+   to alphabetical order after these core lines. */
 const PRIORITY_ORDER = [
-  "Total Revenue", "Retail/B2B Revenue", "Banking Revenue", "Campaign Mgmt Revenue",
-  "Direct Expenses", "Gross Profit", "Indirect Expenses", "EBITDA", "Net Profit",
+  "Total Revenue", "Direct Expenses", "Gross Profit", "Indirect Expenses", "EBITDA", "Net Profit",
 ];
 
-function buildDataset(parsed) {
+function buildDataset(parsed, companyInfo) {
   const { months, kpis, headcount } = parsed;
   const fyGroups = buildFYGroups(months);
   const qGroups = buildQuarterGroups(months);
@@ -172,7 +217,7 @@ function buildDataset(parsed) {
   if (headcount) cardConfigs.push({ key: "Headcount", label: "Headcount (avg)", fmt: fmtNum, good: "neutral", isHeadcount: true });
   if (hasRevenue && headcount) cardConfigs.push({ key: "Rev per Employee", label: "Revenue per Employee", fmt: fmtCr, good: "up", isRevPerEmp: true });
 
-  return { months, kpis, headcount, kpiKeys, fyGroups, fyData, qGroups, qData, cardConfigs, hasRevenue, hasGP, hasEBITDA, hasNet };
+  return { months, kpis, headcount, kpiKeys, fyGroups, fyData, qGroups, qData, cardConfigs, hasRevenue, hasGP, hasEBITDA, hasNet, companyInfo };
 }
 
 function fmtCr(v) {
@@ -193,6 +238,34 @@ function fmtNum(v) {
 function fmtPctSigned(v) {
   if (v === null || v === undefined || Number.isNaN(v)) return "N/A";
   return `${v >= 0 ? "+" : ""}${v.toFixed(1)}%`;
+}
+
+/* ============================================================
+   PERIOD GROWTH — used by the Revenue & Profitability table.
+   Yearly: sequential FY-over-FY (array order). Quarterly: the
+   comparable quarter one FY back (Q2FY26 vs Q2FY25), not the
+   prior sequential quarter — avoids misleading swings from
+   seasonality. Returns a fraction (0.234 = +23.4%) or null when
+   either side of the comparison is missing.
+   ============================================================ */
+function periodGrowth(list, idx, key, quarterly) {
+  const curr = list[idx];
+  if (!curr || typeof curr[key] !== "number") return null;
+  const prev = quarterly
+    ? list.find(o => o.qNum === curr.qNum && o.fyEnd === curr.fyEnd - 1)
+    : (idx > 0 ? list[idx - 1] : null);
+  if (!prev || typeof prev[key] !== "number" || prev[key] === 0) return null;
+  return (curr[key] - prev[key]) / Math.abs(prev[key]);
+}
+
+function GrowthBadge({ value }) {
+  if (value === null || value === undefined || Number.isNaN(value)) {
+    return <span className="delta delta-flat"><Minus size={11} strokeWidth={2.5} />N/A</span>;
+  }
+  const isUp = value > 0.0005, isDown = value < -0.0005;
+  const cls = isUp ? "delta-pos" : isDown ? "delta-neg" : "delta-flat";
+  const Icon = isUp ? TrendingUp : isDown ? TrendingDown : Minus;
+  return <span className={`delta ${cls}`}><Icon size={11} strokeWidth={2.5} />{fmtPctSigned(value * 100)}</span>;
 }
 
 /* ============================================================
@@ -568,16 +641,205 @@ function RevenueForecastChart({ ds }) {
 }
 
 /* ============================================================
+   NEW — Financial tables (Revenue & Profitability, Complete
+   P&L). Both reuse ds.qData / ds.fyData directly: those rows
+   already sum the monthly values per period and compute margins
+   from the aggregated numerator/denominator (see computeRow
+   above), so no separate aggregation logic is needed here — this
+   is presentation only. Both share a Quarterly/Yearly toggle.
+   ============================================================ */
+function PeriodToggle({ mode, onChange }) {
+  return (
+    <div className="period-toggle">
+      <button
+        className={`period-toggle__btn ${mode === "quarterly" ? "period-toggle__btn--active" : ""}`}
+        onClick={() => onChange("quarterly")}
+      >Quarterly</button>
+      <button
+        className={`period-toggle__btn ${mode === "yearly" ? "period-toggle__btn--active" : ""}`}
+        onClick={() => onChange("yearly")}
+      >Yearly</button>
+    </div>
+  );
+}
+
+function periodsFor(ds, mode) {
+  return mode === "quarterly" ? ds.qData : ds.fyData;
+}
+
+function RevenueProfitabilityTable({ ds }) {
+  const [mode, setMode] = useState("quarterly");
+  if (!ds.hasRevenue) return null;
+  const periods = periodsFor(ds, mode);
+  const quarterly = mode === "quarterly";
+
+  const rows = [
+    { label: "Revenue", key: "Total Revenue", type: "currency" },
+    { label: "Revenue Growth", key: "Total Revenue", type: "growth" },
+    ds.hasGP && { label: "Gross Profit", key: "Gross Profit", type: "currency" },
+    ds.hasGP && { label: "Gross Margin", key: "Gross Margin", type: "percent" },
+    ds.hasEBITDA && { label: "EBITDA", key: "EBITDA", type: "currency" },
+    ds.hasEBITDA && { label: "EBITDA Margin", key: "EBITDA Margin", type: "percent" },
+  ].filter(Boolean);
+
+  return (
+    <section className="section">
+      <div className="fin-section__head">
+        <div className="section__title">Revenue &amp; Profitability</div>
+        <PeriodToggle mode={mode} onChange={setMode} />
+      </div>
+      <div className="fin-table-wrap">
+        <table className="fin-table">
+          <thead>
+            <tr>
+              <th className="fin-table__label-col">Metric</th>
+              {periods.map(p => <th key={p.key}>{p.label.replace(" (partial)", "")}{!quarterly && p.partial ? <span className="fin-table__partial"> (partial)</span> : ""}{quarterly && !p.complete ? <span className="fin-table__partial"> (partial)</span> : ""}</th>)}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map(row => (
+              <tr key={row.label}>
+                <td className="fin-table__label-col">{row.label}</td>
+                {periods.map((p, i) => {
+                  if (row.type === "growth") {
+                    return <td key={p.key}><GrowthBadge value={periodGrowth(periods, i, row.key, quarterly)} /></td>;
+                  }
+                  const v = p[row.key];
+                  return <td key={p.key}>{row.type === "percent" ? fmtPct(v) : fmtCr(v)}</td>;
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+function ProfitAndLossTable({ ds }) {
+  const [mode, setMode] = useState("quarterly");
+  if (!ds.hasRevenue) return null;
+  const periods = periodsFor(ds, mode);
+  const quarterly = mode === "quarterly";
+
+  const revenueLines = ds.kpiKeys.filter(k => /revenue/i.test(k) && k !== "Total Revenue");
+  const hasDirect = ds.kpiKeys.includes("Direct Expenses");
+  const hasIndirect = ds.kpiKeys.includes("Indirect Expenses");
+
+  const sections = [
+    {
+      heading: "Revenue",
+      rows: [
+        ...revenueLines.map(k => ({ label: k, key: k, type: "currency" })),
+        { label: "Total Revenue", key: "Total Revenue", type: "currency", subtotal: true },
+      ],
+    },
+    ds.hasGP && {
+      heading: "Cost of Revenue",
+      rows: [
+        hasDirect && { label: "Direct Expenses", key: "Direct Expenses", type: "currency" },
+        { label: "Gross Profit", key: "Gross Profit", type: "currency", subtotal: true },
+        { label: "Gross Margin %", key: "Gross Margin", type: "percent", subtotal: true },
+      ].filter(Boolean),
+    },
+    ds.hasEBITDA && {
+      heading: "Operating Expenses",
+      rows: [
+        hasIndirect && { label: "Indirect Expenses", key: "Indirect Expenses", type: "currency" },
+        { label: "EBITDA", key: "EBITDA", type: "currency", subtotal: true },
+        { label: "EBITDA Margin %", key: "EBITDA Margin", type: "percent", subtotal: true },
+      ].filter(Boolean),
+    },
+    ds.hasNet && {
+      heading: "Below EBITDA",
+      rows: [
+        { label: "Net Profit", key: "Net Profit", type: "currency", subtotal: true },
+        { label: "Net Profit Margin %", key: "Net Margin", type: "percent", subtotal: true },
+      ],
+    },
+  ].filter(Boolean);
+
+  return (
+    <section className="section">
+      <div className="fin-section__head">
+        <div className="section__title">Profit &amp; Loss Statement</div>
+        <PeriodToggle mode={mode} onChange={setMode} />
+      </div>
+      <div className="fin-table-wrap">
+        <table className="fin-table fin-table--pnl">
+          <thead>
+            <tr>
+              <th className="fin-table__label-col">Line item</th>
+              {periods.map(p => <th key={p.key}>{p.label.replace(" (partial)", "")}{quarterly ? (!p.complete ? <span className="fin-table__partial"> (partial)</span> : "") : (p.partial ? <span className="fin-table__partial"> (partial)</span> : "")}</th>)}
+            </tr>
+          </thead>
+          {sections.map(sec => (
+            <tbody key={sec.heading}>
+              <tr className="fin-table__section-row">
+                <td colSpan={periods.length + 1}>{sec.heading}</td>
+              </tr>
+              {sec.rows.map(row => (
+                <tr key={row.label} className={row.subtotal ? "fin-table__subtotal-row" : ""}>
+                  <td className="fin-table__label-col">{row.label}</td>
+                  {periods.map(p => {
+                    const v = p[row.key];
+                    return <td key={p.key}>{row.type === "percent" ? fmtPct(v) : fmtCr(v)}</td>;
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          ))}
+        </table>
+      </div>
+    </section>
+  );
+}
+
+function PlaceholderSection({ title, note }) {
+  return (
+    <section className="section">
+      <div className="placeholder-page">
+        <div className="placeholder-page__eyebrow">Coming next</div>
+        <div className="placeholder-page__title">{title}</div>
+        <div className="placeholder-page__note">{note}</div>
+      </div>
+    </section>
+  );
+}
+
+/* ============================================================
    NEW — Executive summary (narrative, computed live off the
    latest complete quarter / FY in the sheet) and business
    description (static company context).
    ============================================================ */
+/* Picks whichever margin the sheet actually supports, in order of how
+   commonly it's tracked, so the third narrative bullet always has something
+   meaningful to say regardless of which KPI rows a given company fills in. */
+function bestMarginKey(ds) {
+  if (ds.hasRevenue && ds.hasEBITDA) return ["EBITDA Margin", "EBITDA"];
+  if (ds.hasRevenue && ds.hasNet) return ["Net Margin", "Net Profit"];
+  if (ds.hasRevenue && ds.hasGP) return ["Gross Margin", "Gross Profit"];
+  return null;
+}
+
 function ExecutiveSummary({ ds }) {
   const { latestQ, prevYearQ, latestFY, prevFY } = getExecStats(ds);
+  const companyInfo = ds.companyInfo;
 
   const revYoY = latestQ && prevYearQ && ds.hasRevenue && prevYearQ["Total Revenue"]
     ? ((latestQ["Total Revenue"] - prevYearQ["Total Revenue"]) / Math.abs(prevYearQ["Total Revenue"])) * 100
     : null;
+
+  const ebitdaDelta = latestFY && prevFY && ds.hasEBITDA && typeof latestFY["EBITDA"] === "number" && typeof prevFY["EBITDA"] === "number"
+    ? latestFY["EBITDA"] - prevFY["EBITDA"]
+    : null;
+  const ebitdaDirection = ebitdaDelta === null ? null : ebitdaDelta > 0 ? "improved" : ebitdaDelta < 0 ? "declined" : "held steady";
+
+  const marginPick = bestMarginKey(ds);
+  const marginFYIdx = latestFY ? ds.fyData.findIndex(f => f.key === latestFY.key) : -1;
+  const marginPrevFY = marginFYIdx > 0 ? ds.fyData[marginFYIdx - 1] : null;
+  const marginCurr = marginPick && latestFY ? latestFY[marginPick[0]] : null;
+  const marginPrev = marginPick && marginPrevFY ? marginPrevFY[marginPick[0]] : null;
 
   return (
     <section className="section narrative-section">
@@ -589,11 +851,10 @@ function ExecutiveSummary({ ds }) {
             <div className="narrative-bullet">
               <span className="narrative-bullet__icon"><TrendingUp size={15} /></span>
               <span>
-                {latestQ && prevYearQ && ds.hasRevenue ? (
-                  <>The company reported strong quarterly momentum in <strong>{latestQ.label}</strong>, with net revenue
-                  increasing to <strong>{fmtCr(latestQ["Total Revenue"])}</strong> from {fmtCr(prevYearQ["Total Revenue"])} in{" "}
-                  {prevYearQ.label} ({fmtPctSigned(revYoY)} YoY), driven by higher campaign-led revenues and improved
-                  client activation during the year-end period.</>
+                {latestQ && prevYearQ && ds.hasRevenue && prevYearQ["Total Revenue"] ? (
+                  <><strong>{latestQ.label}</strong> closed with net revenue of <strong>{fmtCr(latestQ["Total Revenue"])}</strong>,{" "}
+                  {revYoY >= 0 ? "up" : "down"} {Math.abs(revYoY).toFixed(1)}% versus {fmtCr(prevYearQ["Total Revenue"])} in{" "}
+                  {prevYearQ.label}.</>
                 ) : (
                   <>Revenue data isn't complete enough yet to compute a like-for-like quarterly YoY comparison — add more
                   months to the sheet to unlock this.</>
@@ -603,20 +864,28 @@ function ExecutiveSummary({ ds }) {
             <div className="narrative-bullet">
               <span className="narrative-bullet__icon"><Rocket size={15} /></span>
               <span>
-                {latestFY && prevFY && ds.hasEBITDA ? (
-                  <>A patient turnaround. EBITDA flipped from <strong>{fmtCr(prevFY["EBITDA"])}</strong> in {prevFY.label} to{" "}
+                {latestFY && prevFY && ds.hasEBITDA && ebitdaDirection ? (
+                  <>FY EBITDA {ebitdaDirection} from <strong>{fmtCr(prevFY["EBITDA"])}</strong> in {prevFY.label} to{" "}
                   <strong>{fmtCr(latestFY["EBITDA"])}</strong> in {latestFY.label}
-                  {latestQ ? <>, and turned positive in {latestQ.label} at <strong>{fmtCr(latestQ["EBITDA"])}</strong></> : ""}.
-                  New product launch: <strong>OneConsent</strong>, a CDP for managing user consent across marketing channels.</>
+                  {latestQ && typeof latestQ["EBITDA"] === "number" ? <>, with {latestQ.label} at <strong>{fmtCr(latestQ["EBITDA"])}</strong></> : ""}.</>
                 ) : (
-                  <>New product launch: <strong>OneConsent</strong>, a CDP for managing user consent across marketing channels.</>
+                  <>Not enough complete fiscal years of EBITDA yet to describe a trend — add more months to unlock this.</>
+                )}
+                {companyInfo?.strategicNote && (
+                  <> <strong>{companyInfo.strategicNote.value}</strong>{companyInfo.strategicNote.sub ? ` — ${companyInfo.strategicNote.sub}` : ""}.</>
                 )}
               </span>
             </div>
             <div className="narrative-bullet">
               <span className="narrative-bullet__icon"><Target size={15} /></span>
-              <span>The MOIC isn't impressive yet — but profitable companies tend to find their multiple eventually.
-              The reverse is far rarer.</span>
+              <span>
+                {marginPick && latestFY && typeof marginCurr === "number" ? (
+                  <>{marginPick[0]} for {latestFY.label} stood at <strong>{fmtPct(marginCurr)}</strong>
+                  {typeof marginPrev === "number" ? <>, versus {fmtPct(marginPrev)} the prior FY</> : ""}.</>
+                ) : (
+                  <>Add Total Revenue plus Gross Profit, EBITDA, or Net Profit to the sheet to unlock a margin-trend read-out here.</>
+                )}
+              </span>
             </div>
           </div>
         </div>
@@ -635,9 +904,19 @@ function ExecutiveSummary({ ds }) {
             <div className="stat-tile__sub">{latestFY ? `${latestFY.label}, vs ${prevFY ? fmtCr(prevFY["EBITDA"]) : "N/A"} prior FY` : "—"}</div>
           </div>
           <div className="stat-tile">
-            <div className="stat-tile__label">Strategic note</div>
-            <div className="stat-tile__value" style={{ fontSize: 16 }}>OneConsent CDP</div>
-            <div className="stat-tile__sub">Consent management across marketing channels</div>
+            {companyInfo?.strategicNote ? (
+              <>
+                <div className="stat-tile__label">{companyInfo.strategicNote.label}</div>
+                <div className="stat-tile__value" style={{ fontSize: 16 }}>{companyInfo.strategicNote.value}</div>
+                {companyInfo.strategicNote.sub && <div className="stat-tile__sub">{companyInfo.strategicNote.sub}</div>}
+              </>
+            ) : (
+              <>
+                <div className="stat-tile__label">{marginPick ? marginPick[0] : "FY Margin"}</div>
+                <div className="stat-tile__value">{marginPick && typeof marginCurr === "number" ? fmtPct(marginCurr) : "N/A"}</div>
+                <div className="stat-tile__sub">{latestFY ? `${latestFY.label}${typeof marginPrev === "number" ? `, vs ${fmtPct(marginPrev)} prior FY` : ""}` : "—"}</div>
+              </>
+            )}
           </div>
         </div>
       </div>
@@ -645,43 +924,49 @@ function ExecutiveSummary({ ds }) {
   );
 }
 
-function BusinessDescription() {
+const CHIP_ICONS = [Layers, ShieldCheck, Target, Info];
+const SCALE_ICONS = [Building2, Store, Users];
+
+function BusinessDescription({ companyInfo }) {
+  if (!companyInfo) return null;
+  const { description, tags, scaleMetrics } = companyInfo;
+  if (!description && !tags.length && !scaleMetrics.length) return null;
+
   return (
     <section className="section narrative-section">
       <div className="section__title">Business Description</div>
       <div className="biz-card">
-        <p className="biz-desc-text">
-          The company offers industry-agnostic, cloud-based CRM, Loyalty and Conversational Commerce solutions that
-          enable seamless omnichannel customer experience. It runs loyalty programs for banks and online platforms.
-        </p>
-        <div className="biz-chip-row">
-          <span className="biz-chip"><Layers size={11} style={{ marginRight: 5, verticalAlign: -2 }} />SaaS Technology</span>
-          <span className="biz-chip"><ShieldCheck size={11} style={{ marginRight: 5, verticalAlign: -2 }} />Loyalty Platform as a Service</span>
-          <span className="biz-chip"><Target size={11} style={{ marginRight: 5, verticalAlign: -2 }} />Consumer Analytics</span>
-        </div>
-        <div className="biz-scale-row">
-          <div className="biz-scale-tile">
-            <Building2 size={22} className="biz-scale-icon" />
-            <div>
-              <div className="biz-scale-value">220+</div>
-              <div className="biz-scale-label">Brands</div>
-            </div>
+        {description && <p className="biz-desc-text">{description}</p>}
+
+        {tags.length > 0 && (
+          <div className="biz-chip-row">
+            {tags.map((tag, i) => {
+              const Icon = CHIP_ICONS[i % CHIP_ICONS.length];
+              return (
+                <span className="biz-chip" key={tag}>
+                  <Icon size={11} style={{ marginRight: 5, verticalAlign: -2 }} />{tag}
+                </span>
+              );
+            })}
           </div>
-          <div className="biz-scale-tile">
-            <Store size={22} className="biz-scale-icon" />
-            <div>
-              <div className="biz-scale-value">25,000+</div>
-              <div className="biz-scale-label">Stores / Branches</div>
-            </div>
+        )}
+
+        {scaleMetrics.length > 0 && (
+          <div className="biz-scale-row">
+            {scaleMetrics.map((sm, i) => {
+              const Icon = SCALE_ICONS[i % SCALE_ICONS.length];
+              return (
+                <div className="biz-scale-tile" key={sm.label}>
+                  <Icon size={22} className="biz-scale-icon" />
+                  <div>
+                    <div className="biz-scale-value">{sm.value}</div>
+                    <div className="biz-scale-label">{sm.label}</div>
+                  </div>
+                </div>
+              );
+            })}
           </div>
-          <div className="biz-scale-tile">
-            <Users size={22} className="biz-scale-icon" />
-            <div>
-              <div className="biz-scale-value">Banks &amp; Platforms</div>
-              <div className="biz-scale-label">Core loyalty client base</div>
-            </div>
-          </div>
-        </div>
+        )}
       </div>
     </section>
   );
@@ -691,9 +976,9 @@ function EmptyState({ onFile, status }) {
   const [dragOver, setDragOver] = useState(false);
   return (
     <div className="empty-wrap">
-      <div className="empty-eyebrow">EasyRewardz · Consolidated MIS</div>
-      <div className="empty-title">Startup MIS Dashboard</div>
-      <div className="empty-sub">Upload the mastersheet to build the dashboard. Nothing renders until real data arrives.</div>
+      <div className="empty-eyebrow">Consolidated MIS</div>
+      <div className="empty-title">MIS Dashboard</div>
+      <div className="empty-sub">Upload your company's mastersheet to build the dashboard. Nothing renders until real data arrives.</div>
 
       <label
         className={`dropzone ${dragOver ? "dropzone--over" : ""}`}
@@ -715,8 +1000,9 @@ function EmptyState({ onFile, status }) {
       )}
 
       <div className="empty-hint">
-        Don't have one yet? Use the rolling mastersheet template — it already has Mar'22 through Jun'26
-        filled in from the source MIS workbooks. Each new quarter, add columns and re-upload.
+        Don't have one yet? Duplicate the mastersheet template in the <code>excel_template</code> folder — fill in
+        your company's KPIs on the "Monthly Data" sheet and (optionally) your company profile on the "Company Info"
+        sheet, keeping row labels exactly as they are, then upload it here. Each new quarter, add columns and re-upload.
       </div>
     </div>
   );
@@ -728,6 +1014,7 @@ export default function App() {
   const [expanded, setExpanded] = useState(null);
   const [status, setStatus] = useState(null);
   const [fileName, setFileName] = useState(null);
+  const [section, setSection] = useState("performance");
 
   const onToggle = useCallback((key) => setExpanded(e => (e === key ? null : key)), []);
 
@@ -737,7 +1024,8 @@ export default function App() {
       const buf = await file.arrayBuffer();
       const wb = XLSX.read(buf, { type: "array", cellDates: true });
       const parsed = parseWorkbook(wb);
-      const ds = buildDataset(parsed);
+      const companyInfo = parseCompanyInfo(wb);
+      const ds = buildDataset(parsed, companyInfo);
       setDataset(ds);
       setFyIndex(ds.fyData.length - 1);
       setFileName(file.name);
@@ -751,6 +1039,10 @@ export default function App() {
     const file = e.target.files?.[0];
     if (file) await handleFile(file);
   }, [handleFile]);
+
+  useEffect(() => {
+    document.title = dataset?.companyInfo?.companyName ? `${dataset.companyInfo.companyName} — MIS Dashboard` : "MIS Dashboard";
+  }, [dataset]);
 
   if (!dataset) {
     return (
@@ -769,8 +1061,8 @@ export default function App() {
 
       <header className="masthead">
         <div>
-          <div className="masthead__eyebrow">EasyRewardz · Consolidated MIS</div>
-          <div className="masthead__title">Startup MIS Dashboard</div>
+          <div className="masthead__eyebrow">{dataset.companyInfo?.companyName ? `${dataset.companyInfo.companyName} · ` : ""}Consolidated MIS</div>
+          <div className="masthead__title">MIS Dashboard</div>
           <div className="masthead__meta">
             {fileName} · {dataset.months[0].label} → {dataset.months[dataset.months.length - 1].label} · viewing {fy.label} ({fy.sub})
           </div>
@@ -788,101 +1080,130 @@ export default function App() {
         </div>
       </header>
 
+      <nav className="dash-nav">
+        <button className={`dash-nav__tab ${section === "performance" ? "dash-nav__tab--active" : ""}`} onClick={() => setSection("performance")}>Performance</button>
+        <button className={`dash-nav__tab ${section === "industry" ? "dash-nav__tab--active" : ""}`} onClick={() => setSection("industry")}>Industry &amp; Competitors</button>
+        <button className={`dash-nav__tab ${section === "news" ? "dash-nav__tab--active" : ""}`} onClick={() => setSection("news")}>News &amp; Updates</button>
+      </nav>
+
       {status && status.type !== "success" && (
         <div className={`upload-bar upload-bar--${status.type}`}>
           <FileSpreadsheet size={14} /><span>{status.text}</span>
         </div>
       )}
 
-      <ExecutiveSummary ds={dataset} />
-      <BusinessDescription />
+      {section === "performance" && (
+        <>
+          <RevenueProfitabilityTable ds={dataset} />
 
-      <section className="section">
-        <div className="section__title">Key Metrics <span className="section__sub">— {fy.label} vs {fyIndex > 0 ? dataset.fyData[fyIndex - 1].label : "—"}</span></div>
-        <div className="kpi-grid">
-          {dataset.cardConfigs.map(cfg => (
-            <KpiCard key={cfg.key} cfg={cfg} ds={dataset} fyIndex={fyIndex} expanded={expanded} onToggle={onToggle} />
-          ))}
-        </div>
-      </section>
+          <ExecutiveSummary ds={dataset} />
+          <BusinessDescription companyInfo={dataset.companyInfo} />
 
-      {expanded && (
-        <DrillDownModal
-          cfg={dataset.cardConfigs.find(c => c.key === expanded)}
-          ds={dataset}
-          fyIndex={fyIndex}
-          onClose={() => setExpanded(null)}
+          <section className="section">
+            <div className="section__title">Key Metrics <span className="section__sub">— {fy.label} vs {fyIndex > 0 ? dataset.fyData[fyIndex - 1].label : "—"}</span></div>
+            <div className="kpi-grid">
+              {dataset.cardConfigs.map(cfg => (
+                <KpiCard key={cfg.key} cfg={cfg} ds={dataset} fyIndex={fyIndex} expanded={expanded} onToggle={onToggle} />
+              ))}
+            </div>
+          </section>
+
+          {expanded && (
+            <DrillDownModal
+              cfg={dataset.cardConfigs.find(c => c.key === expanded)}
+              ds={dataset}
+              fyIndex={fyIndex}
+              onClose={() => setExpanded(null)}
+            />
+          )}
+
+          <section className="section">
+            <div className="section__title">Performance &amp; Mix</div>
+            <div className="chart-grid">
+              <div className="chart-card">
+                <div className="chart-card__title">Revenue Trend</div>
+                <div className="chart-card__note">Monthly, {dataset.months[0].label} → {dataset.months[dataset.months.length - 1].label}</div>
+                <RevenueTrendChart ds={dataset} />
+              </div>
+              <div className="chart-card">
+                <div className="chart-card__title">Revenue Mix</div>
+                <div className="chart-card__note">By revenue sub-line, per FY</div>
+                <RevenueMixChart ds={dataset} />
+              </div>
+              <div className="chart-card">
+                <div className="chart-card__title">Profitability Trend</div>
+                <div className="chart-card__note">Revenue (bars) vs EBITDA &amp; Net Profit (lines), by FY</div>
+                <ProfitabilityChart ds={dataset} />
+              </div>
+              <div className="chart-card">
+                <div className="chart-card__title">Margin Trend</div>
+                <div className="chart-card__note">Gross / EBITDA / Net margin, by FY</div>
+                <MarginTrendChart ds={dataset} />
+              </div>
+            </div>
+          </section>
+
+          <section className="section">
+            <div className="section__title">Outlook &amp; Forecast <span className="section__sub">— quarterly, trend-projected</span></div>
+            <div className="chart-grid">
+              <div className="chart-card">
+                <div className="chart-card__title">Quarterly Revenue — YoY</div>
+                <div className="chart-card__note">Last 8 quarters; latest quarter highlighted in gold</div>
+                <QuarterlyRevenueChart ds={dataset} />
+              </div>
+              <div className="chart-card">
+                <div className="chart-card__title">EBITDA Turnaround &amp; Forecast</div>
+                <div className="chart-card__note">Green = positive, red = negative, dashed = projected</div>
+                <EbitdaTurnaroundChart ds={dataset} />
+              </div>
+              <div className="chart-card" style={{ gridColumn: "1 / -1" }}>
+                <div className="chart-card__title">Revenue Trend &amp; Forecast</div>
+                <div className="chart-card__note">Linear trend on the last up to 8 complete quarters, projected 2 quarters forward</div>
+                <RevenueForecastChart ds={dataset} />
+              </div>
+            </div>
+          </section>
+
+          <section className="section">
+            <div className="section__title">Cash &amp; Operations</div>
+            <div className="chart-grid">
+              <div className="chart-card" style={{ gridColumn: "1 / -1" }}>
+                <div className="chart-card__title">Headcount &amp; Productivity</div>
+                <div className="chart-card__note">Average headcount (bars) vs revenue per employee (line), by FY</div>
+                <HeadcountChart ds={dataset} />
+              </div>
+            </div>
+          </section>
+
+          <ProfitAndLossTable ds={dataset} />
+
+          <div className="footnote">
+            <Info size={13} style={{ flexShrink: 0, marginTop: 2 }} />
+            <span>
+              Every card, chart, table, narrative, and FY/quarter grouping above is computed live from the uploaded
+              sheet — nothing is hardcoded. The Business Description section and company name come from the optional
+              "Company Info" sheet, if one is present. FY periods are derived from the dates in row 1 (Apr–Mar), so
+              adding a new quarter's columns and re-uploading is all a refresh needs. Forecast lines in the Outlook
+              section are a simple linear trend over the most recent complete quarters, not a modeled projection —
+              treat them as directional only.
+            </span>
+          </div>
+        </>
+      )}
+
+      {section === "industry" && (
+        <PlaceholderSection
+          title="Industry & Competitors"
+          note="Sector overview, market context, and competitive positioning will land here in a later phase."
         />
       )}
 
-      <section className="section">
-        <div className="section__title">Performance &amp; Mix</div>
-        <div className="chart-grid">
-          <div className="chart-card">
-            <div className="chart-card__title">Revenue Trend</div>
-            <div className="chart-card__note">Monthly, {dataset.months[0].label} → {dataset.months[dataset.months.length - 1].label}</div>
-            <RevenueTrendChart ds={dataset} />
-          </div>
-          <div className="chart-card">
-            <div className="chart-card__title">Revenue Mix</div>
-            <div className="chart-card__note">By revenue sub-line, per FY</div>
-            <RevenueMixChart ds={dataset} />
-          </div>
-          <div className="chart-card">
-            <div className="chart-card__title">Profitability Trend</div>
-            <div className="chart-card__note">Revenue (bars) vs EBITDA &amp; Net Profit (lines), by FY</div>
-            <ProfitabilityChart ds={dataset} />
-          </div>
-          <div className="chart-card">
-            <div className="chart-card__title">Margin Trend</div>
-            <div className="chart-card__note">Gross / EBITDA / Net margin, by FY</div>
-            <MarginTrendChart ds={dataset} />
-          </div>
-        </div>
-      </section>
-
-      <section className="section">
-        <div className="section__title">Outlook &amp; Forecast <span className="section__sub">— quarterly, trend-projected</span></div>
-        <div className="chart-grid">
-          <div className="chart-card">
-            <div className="chart-card__title">Quarterly Revenue — YoY</div>
-            <div className="chart-card__note">Last 8 quarters; latest quarter highlighted in gold</div>
-            <QuarterlyRevenueChart ds={dataset} />
-          </div>
-          <div className="chart-card">
-            <div className="chart-card__title">EBITDA Turnaround &amp; Forecast</div>
-            <div className="chart-card__note">Green = positive, red = negative, dashed = projected</div>
-            <EbitdaTurnaroundChart ds={dataset} />
-          </div>
-          <div className="chart-card" style={{ gridColumn: "1 / -1" }}>
-            <div className="chart-card__title">Revenue Trend &amp; Forecast</div>
-            <div className="chart-card__note">Linear trend on the last up to 8 complete quarters, projected 2 quarters forward</div>
-            <RevenueForecastChart ds={dataset} />
-          </div>
-        </div>
-      </section>
-
-      <section className="section">
-        <div className="section__title">Cash &amp; Operations</div>
-        <div className="chart-grid">
-          <div className="chart-card" style={{ gridColumn: "1 / -1" }}>
-            <div className="chart-card__title">Headcount &amp; Productivity</div>
-            <div className="chart-card__note">Average headcount (bars) vs revenue per employee (line), by FY</div>
-            <HeadcountChart ds={dataset} />
-          </div>
-        </div>
-      </section>
-
-      <div className="footnote">
-        <Info size={13} style={{ flexShrink: 0, marginTop: 2 }} />
-        <span>
-          Every card, chart, and FY/quarter grouping above is computed live from the uploaded sheet — nothing is
-          hardcoded except the business description and product-launch note. FY periods are derived from the dates
-          in row 1 (Apr–Mar), so adding a new quarter's columns and re-uploading is all a refresh needs. Forecast
-          lines in the Outlook section are a simple linear trend over the most recent complete quarters, not a
-          modeled projection — treat them as directional only.
-        </span>
-      </div>
+      {section === "news" && (
+        <PlaceholderSection
+          title="News & Updates"
+          note="Product launches, partnerships, funding events, and other externally sourced updates will land here in a later phase."
+        />
+      )}
     </div>
   );
 }
@@ -1021,6 +1342,51 @@ function GlobalStyles() {
       .chart-empty { font-size:12.5px; color:var(--muted); padding:40px 8px; text-align:center; }
 
       .footnote { padding:24px 40px 0; font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--muted); display:flex; gap:8px; align-items:flex-start; line-height:1.6; }
+
+      /* ---- top-level section nav ---- */
+      .dash-nav { display:flex; gap:4px; padding:0 40px; border-bottom:1px solid var(--border); background:var(--surface); overflow-x:auto; }
+      .dash-nav__tab { font-family:'IBM Plex Mono',monospace; font-size:12.5px; white-space:nowrap; padding:14px 18px; border:none; background:transparent;
+                       color:var(--muted); cursor:pointer; border-bottom:2px solid transparent; margin-bottom:-1px; transition:color .15s, border-color .15s; }
+      .dash-nav__tab:hover { color:var(--ink); }
+      .dash-nav__tab--active { color:var(--brand); border-bottom-color:var(--brand); font-weight:600; }
+      @media (max-width:600px) { .dash-nav { padding:0 20px; } }
+
+      /* ---- placeholder pages (Industry & Competitors, News & Updates) ---- */
+      .placeholder-page { max-width:520px; margin:48px auto; text-align:center; padding:48px 24px; border:1px dashed var(--border); border-radius:16px; }
+      .placeholder-page__eyebrow { font-family:'IBM Plex Mono',monospace; font-size:11px; letter-spacing:0.12em; text-transform:uppercase; color:var(--gold); margin-bottom:10px; }
+      .placeholder-page__title { font-family:'Fraunces',serif; font-size:26px; font-weight:500; margin-bottom:10px; }
+      .placeholder-page__note { font-size:13px; color:var(--muted); line-height:1.6; }
+
+      /* ---- financial tables (Revenue & Profitability, P&L) ---- */
+      .fin-section__head { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px; margin-bottom:16px; }
+      .fin-section__head .section__title { margin-bottom:0; }
+
+      .period-toggle { display:flex; gap:4px; background:var(--surface); padding:4px; border-radius:10px; border:1px solid var(--border); flex-shrink:0; }
+      .period-toggle__btn { font-family:'IBM Plex Mono',monospace; font-size:12px; padding:7px 14px; border-radius:7px; border:none; background:transparent; color:var(--muted); cursor:pointer; transition:all .15s; white-space:nowrap; }
+      .period-toggle__btn:hover { color:var(--ink); }
+      .period-toggle__btn--active { background:var(--brand); color:#fff; }
+
+      .fin-table-wrap { overflow-x:auto; border:1px solid var(--border); border-radius:12px; }
+      .fin-table { width:100%; border-collapse:collapse; font-family:'IBM Plex Mono',monospace; font-size:12.5px; white-space:nowrap; }
+      .fin-table thead th { text-align:right; font-weight:500; color:var(--muted); font-size:10.5px; text-transform:uppercase; letter-spacing:0.04em; padding:12px 16px; border-bottom:1px solid var(--border); background:var(--surface); }
+      .fin-table tbody td { text-align:right; padding:10px 16px; border-bottom:1px solid #F0F1F3; color:var(--ink); }
+      .fin-table tbody tr:last-child td { border-bottom:none; }
+      .fin-table tbody tr:not(.fin-table__section-row):hover td { background:#FAFAF7; }
+      .fin-table tbody tr:not(.fin-table__section-row) td:last-child,
+      .fin-table thead th:last-child { background:#F6F1E4; }
+      .fin-table thead th:last-child { font-weight:600; }
+      .fin-table tbody tr:not(.fin-table__section-row):hover td:last-child { background:#F1EBD9; }
+
+      .fin-table__label-col { position:sticky; left:0; background:#fff; font-family:'Inter',sans-serif; font-size:12.5px; font-weight:500;
+                               text-align:left !important; z-index:1; border-right:1px solid var(--border); min-width:170px; }
+      .fin-table thead th.fin-table__label-col { background:var(--surface); z-index:2; }
+      .fin-table__partial { color:var(--gold); font-weight:500; }
+
+      .fin-table__section-row td { background:var(--surface); font-family:'Inter',sans-serif; font-size:11px; font-weight:600; text-transform:uppercase;
+                                    letter-spacing:0.05em; color:var(--brand); text-align:left; padding:9px 16px; border-bottom:1px solid var(--border); }
+      .fin-table__subtotal-row td { font-weight:600; border-top:1px solid var(--border); }
+      .fin-table__subtotal-row td.fin-table__label-col { background:#fff; }
+      .fin-table .delta { font-size:11px; padding:2px 6px; justify-content:flex-end; }
     `}</style>
   );
 }
