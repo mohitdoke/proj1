@@ -281,6 +281,17 @@ const COMPANY_CONFIGS = {
     revenueLabel: "Revenue",
     priorityOrder: ["Total Revenue", "Direct Expenses", "Gross Profit", "Indirect Expenses", "EBITDA", "Net Profit"],
     pnlRevenueSubLines: null, // null = default behaviour: every "*Revenue*" row except the base
+    // TEMPORARY fallback for the fee-type KPI split (Platform / SetUp /
+    // Campaign Management) — this workbook splits revenue by client segment,
+    // not by fee type, so Platform/SetUp genuinely have no matching row.
+    // Values are fractions (fmtPct multiplies by 100). Campaign Management
+    // already resolves from real MIS data via KPI_SEMANTIC_RULES, so its
+    // fallback here is inert unless a future upload removes that row.
+    fallbackKPIs: {
+      platformRevenue: { FY24: 0.64, FY25: 0.67, FY26: 0.59, Q4FY25: 0.65, Q4FY26: 0.53 },
+      setupRevenue: { FY24: 0.12, FY25: 0.09, FY26: 0.06, Q4FY25: 0.09, Q4FY26: 0.06 },
+      campaignManagement: { FY24: 0.24, FY25: 0.24, FY26: 0.35, Q4FY25: 0.26, Q4FY26: 0.41 },
+    },
     showForecast: true,
     layout: "easyrewardz",
   },
@@ -314,10 +325,21 @@ const COMPANY_CONFIGS = {
       totalMatch: /^loan\s*disbursals$/i,
       totalLabel: "Total Disbursals (loans)",
       shareRows: [
-        { label: "Schools", match: /schools\s*loan\s*disbursals/i },
-        { label: "Colleges", match: /higher\s*education\s*loan\s*disbursals/i },
-        { label: "Edtech Platforms", match: /edtech\s*platforms?\s*loan\s*disbursals/i },
+        { label: "Schools", slug: "schools", match: /schools\s*loan\s*disbursals/i },
+        { label: "Colleges", slug: "colleges", match: /higher\s*education\s*loan\s*disbursals/i },
+        { label: "Edtech Platforms", slug: "edtechPlatforms", match: /edtech\s*platforms?\s*loan\s*disbursals/i },
       ],
+    },
+    // TEMPORARY fallback for the Schools/Colleges/Edtech share rows (fractions,
+    // fmtPct multiplies by 100) — inert in practice since this workbook's
+    // "Loan Disbursals" family already resolves all three from real MIS data.
+    // (The total-disbursals fallback given alongside these is a ₹-Cr amount,
+    // not a loan count, so it's intentionally not wired — see the comment
+    // above GrayQuestKPITable's `unmatched` line.)
+    fallbackKPIs: {
+      schools: { FY24: 0.679, FY25: 0.658, FY26: 0.835, Q4FY25: 0.634, Q4FY26: 0.835 },
+      colleges: { FY24: 0.263, FY25: 0.290, FY26: 0.055, Q4FY25: 0.218, Q4FY26: 0.055 },
+      edtechPlatforms: { FY24: 0.059, FY25: 0.052, FY26: 0.110, Q4FY25: 0.148, Q4FY26: 0.110 },
     },
     showForecast: false,
     layout: "grayquest",
@@ -365,8 +387,8 @@ const COMPANY_CONFIGS = {
       // never assumed to exist. If the workbook has no matching row, the row
       // renders N/A with a footnote rather than a guessed figure.
       rows: [
-        { label: "Policy Count (In Cr.)", decimals: 2, matchers: [/policy\s*count/i, /number\s*of\s*policies/i, /polic(y|ies)\s*(issued|sold|bound|written)/i] },
-        { label: "GWP (In Cr.)", decimals: 1, matchers: [/gross\s*written\s*premium/i, /\bgwp\b/i, /premium\s*(written|collected|volume)/i, /\bpolicy\s*premium\b/i] },
+        { label: "Policy Count (In Cr.)", slug: "policyCount", growthSlug: "policyCountGrowth", decimals: 2, matchers: [/policy\s*count/i, /number\s*of\s*policies/i, /polic(y|ies)\s*(issued|sold|bound|written)/i] },
+        { label: "GWP (In Cr.)", slug: "gwp", growthSlug: "gwpGrowth", decimals: 1, matchers: [/gross\s*written\s*premium/i, /\bgwp\b/i, /premium\s*(written|collected|volume)/i, /\bpolicy\s*premium\b/i] },
       ],
       // Revenue-mix rows used only by the Performance Summary narrative (share
       // of Net Revenue), separate from the KPI table above.
@@ -376,8 +398,102 @@ const COMPANY_CONFIGS = {
         { label: "One-time / Setup Fees", match: /^one-?time\s*\/?\s*set-?up\s*fees?$/i },
       ],
     },
+    // TEMPORARY fallback — this workbook has no Policy Count / GWP rows at
+    // all (confirmed against both the sheet and its Read Me). Values are
+    // stored in the same raw units fmtCrPlain expects (Cr value × 1e7 for
+    // currency/count rows) and fractions for growth (GrowthBadge multiplies
+    // by 100), so a fallback cell renders through the exact same formatting
+    // call as a real one. Remove this block once the source MIS carries
+    // reliable Policy Count / GWP data.
+    fallbackKPIs: {
+      policyCount: { FY24: 0.09e7, FY25: 0.11e7, FY26: 0.11e7, Q4FY25: 0.03e7, Q4FY26: 0.05e7 },
+      policyCountGrowth: { FY24: 0.459, FY25: 0.300, FY26: -0.056, Q4FY25: 0.347, Q4FY26: 0.854 },
+      gwp: { FY24: 1558.0e7, FY25: 1461.3e7, FY26: 1897.5e7, Q4FY25: 525.3e7, Q4FY26: 839.1e7 },
+      gwpGrowth: { FY24: 0.698, FY25: -0.062, FY26: 0.299, Q4FY25: -0.060, Q4FY26: 0.597 },
+    },
     showForecast: false,
     layout: "riskcovry",
+  },
+  multipl: {
+    id: "multipl",
+    defaultDescription: {
+      companyName: "Multipl",
+      description: "Multipl Fintech Solutions Private Limited (brand: Multipl) is a Save Now Buy Later (SNBL) / " +
+        "goal-based savings and investment platform. Users save toward fixed financial goals and invest those " +
+        "savings through market instruments or with partner brands. Multipl is a SEBI-registered investment adviser.",
+      tags: ["Save Now Buy Later", "Goal-Based Investing", "SEBI-Registered Investment Adviser"],
+      scaleMetrics: [],
+      strategicNote: null,
+    },
+    // Distinctive MULTIPL row names — none appear in the other three sheets.
+    signals: [/goal\s*acquisition\s*cost/i, /assets\s*under\s*advice/i, /goals\s*created/i, /target\s*value\s*of\s*goals/i, /brand\s*partners/i],
+    revenueBaseKey: "Total Revenue",
+    revenueLabel: "Net Revenue",
+    // No "Indirect Expenses" row in this workbook — the closest concept is
+    // "Total Operating Costs" (per the workbook's own Read Me: "EBITDA is
+    // derived as Total Revenue minus Total Operating Costs"), so the P&L's
+    // Operating Expenses line is retargeted at that row instead of forcing a
+    // generic "Indirect Expenses" row that doesn't exist here.
+    opexKey: "Total Operating Costs",
+    priorityOrder: [
+      "Total Revenue", "EBITDA", "Total Operating Costs", "Monthly Burn", "Goals Created",
+      "Assets Under Advice (AUA)", "Target Value of Goals", "Signups", "KYC", "Brand Partners",
+      "Repeat Goals", "Goal Acquisition Cost", "Average Goal Value", "Cash in Hand",
+    ],
+    // No revenue sub-lines in this workbook (a single "Total Revenue" row) —
+    // left empty rather than letting the default "any *Revenue* row" fallback
+    // pick up the redundant "Revenue (INR Lakhs)" row (which is excluded
+    // below anyway, but this stays explicit).
+    pnlRevenueSubLines: [],
+    // Redundant duplicate rows of a metric already shown elsewhere, just in a
+    // different unit/cadence — dropped entirely so they don't surface as a
+    // second, confusingly-scaled card for the same figure (verified
+    // numerically: "Revenue (INR Lakhs)" = "Total Revenue" ÷ 1e5; "Monthly
+    // Burn (INR million)" = "Monthly Burn" ÷ 1e6; "GAC (Quarterly)" is a
+    // separately-precomputed quarterly cut of "Goal Acquisition Cost", which
+    // this dashboard already derives its own quarterly average for).
+    excludeRowMatchers: [/revenue\s*\(inr\s*lakhs\)/i, /monthly\s*burn\s*\(inr\s*million\)/i, /gac\s*\(quarterly\)/i],
+    // Per-unit-rupee metrics (cost per goal acquired, average value per goal)
+    // — averaged across the period like a rate, formatted as a plain ₹
+    // amount rather than a percentage or ₹ Cr.
+    rateRowMatchers: [],
+    rupeeAvgRowMatchers: [/^goal\s*acquisition\s*cost$/i, /average\s*goal\s*value/i],
+    // Point-in-time balance/snapshot rows — the right "value for FY26" is the
+    // last reading in FY26, not a sum or average of FY26's monthly readings.
+    stockRowMatchers: [/assets\s*under\s*advice/i, /^kyc$/i, /^signups$/i, /target\s*value\s*of\s*goals/i, /cash\s*in\s*hand/i, /brand\s*partners/i],
+    // "Goals Created" is a running cumulative total in this workbook (never
+    // decreases) — but the dashboard's "Total Goals" KPI wants goals created
+    // WITHIN the period, so it's aggregated as the delta of that running
+    // total (verified: this delta matches the provided reference figures for
+    // FY24/FY25/FY26/Q4FY25/Q4FY26 exactly).
+    deltaRowMatchers: [/goals\s*created/i],
+    // Plain-count rows — formatted as a number, not ₹ Cr.
+    countRowMatchers: [/^kyc$/i, /^signups$/i, /goals\s*created/i, /repeat\s*goals/i, /brand\s*partners/i],
+    // AUA and Target Value of Goals are already expressed in INR Cr by the
+    // source MIS itself (per its Read Me) — must not be divided by 1e7 again.
+    alreadyCrRowMatchers: [/assets\s*under\s*advice/i, /target\s*value\s*of\s*goals/i],
+    kpi: {
+      rows: [
+        { label: "Total Downloads", slug: "totalDownloads", matchers: [/total\s*downloads/i, /^downloads$/i, /app\s*downloads/i, /cumulative\s*downloads/i], fmt: fmtNum },
+        { label: "Total Goals (INR Cr)", slug: "totalGoals", matchers: [/goals\s*created/i, /^total\s*goals$/i, /goal\s*count/i, /number\s*of\s*goals/i], fmt: fmtNum },
+        { label: "Amt of Goals (INR Cr)", slug: "amtOfGoals", matchers: [/target\s*value\s*of\s*goals/i, /goal\s*value/i, /amount\s*of\s*goals/i, /total\s*goal\s*value/i], fmt: fmtCrAlready },
+      ],
+    },
+    // TEMPORARY fallback. "Total Downloads" has no MIS row at all (fallback
+    // used for every period below). "Total Goals" is fully MIS-derivable
+    // (delta-of-cumulative matches these exact reference figures) so this
+    // entry is inert in practice. "Amt of Goals" is MIS-derivable only
+    // through FY24 (the source stops there) — fallback fills FY25/FY26/
+    // Q4FY25/Q4FY26 where the real row is blank. Values are in the same
+    // units the row's own `fmt` expects (plain counts for fmtNum, Cr-native
+    // for fmtCrAlready).
+    fallbackKPIs: {
+      totalDownloads: { FY24: 132373, FY25: 273234, FY26: 471221, Q4FY25: 104204, Q4FY26: 99841 },
+      totalGoals: { FY24: 17087, FY25: 45467, FY26: 85146, Q4FY25: 18369, Q4FY26: 16004 },
+      amtOfGoals: { FY24: 1300, FY25: 2339, FY26: 3659, Q4FY25: 2339, Q4FY26: 3659 },
+    },
+    showForecast: false,
+    layout: "multipl",
   },
 };
 
@@ -461,7 +577,13 @@ function buildDataset(parsed, companyInfo, companyConfig = COMPANY_CONFIGS.easyr
   const revenueBaseKey = companyConfig.revenueBaseKey || "Total Revenue";
   const revenueLabel = companyConfig.revenueLabel || "Revenue";
   const priorityOrder = companyConfig.priorityOrder || PRIORITY_ORDER;
-  const kpiKeys = Object.keys(kpis).sort((a, b) => {
+  // Some workbooks carry redundant duplicate rows of a metric already shown
+  // elsewhere, just in a different unit (e.g. MULTIPL's "Revenue (INR Lakhs)"
+  // duplicating "Total Revenue", or "Monthly Burn (INR million)" duplicating
+  // "Monthly Burn") — these are dropped entirely rather than surfaced as a
+  // second, confusingly-scaled card for the same underlying figure.
+  const excludeMatchers = companyConfig.excludeRowMatchers || [];
+  const kpiKeys = Object.keys(kpis).filter(k => !excludeMatchers.some(re => re.test(k))).sort((a, b) => {
     const ia = priorityOrder.indexOf(a), ib = priorityOrder.indexOf(b);
     if (ia === -1 && ib === -1) return a.localeCompare(b);
     if (ia === -1) return 1;
@@ -489,6 +611,30 @@ function buildDataset(parsed, companyInfo, companyConfig = COMPANY_CONFIGS.easyr
   // meaningless "₹0.02 Cr".
   const countMatchers = companyConfig.countRowMatchers || [];
   const countKeys = new Set(kpiKeys.filter(k => countMatchers.some(re => re.test(k))));
+  // Stock/balance rows (AUA, KYC-to-date, cumulative signups, cash on hand,
+  // active partner count, ...) represent a point-in-time snapshot, not
+  // something that accrues within a period — the correct "value for FY26" is
+  // the last reading in FY26, not a sum or average of FY26's monthly readings.
+  const stockMatchers = companyConfig.stockRowMatchers || [];
+  const stockKeys = new Set(kpiKeys.filter(k => stockMatchers.some(re => re.test(k))));
+  // Cumulative-running-total rows where the dashboard KPI actually wants the
+  // period's *increase* (e.g. "goals created this FY", not "goals created
+  // ever, as of this FY's end") — the period value is last-in-period minus
+  // last-value-immediately-before-the-period, i.e. the delta of the running
+  // total. Returns null (not a guess) when there's no reading before the
+  // period to diff against, e.g. the sheet's very first period.
+  const deltaMatchers = companyConfig.deltaRowMatchers || [];
+  const deltaKeys = new Set(kpiKeys.filter(k => deltaMatchers.some(re => re.test(k))));
+  // Rows already expressed in INR Cr by the source MIS itself (per the
+  // workbook's own Read Me) — must NOT be run through fmtCr's /1e7, which
+  // assumes raw-rupee input and would otherwise shrink a real "115 Cr" AUA
+  // reading down to "0.00 Cr".
+  const alreadyCrMatchers = companyConfig.alreadyCrRowMatchers || [];
+  const alreadyCrKeys = new Set(kpiKeys.filter(k => alreadyCrMatchers.some(re => re.test(k))));
+  // Per-unit rupee rows (cost per goal acquired, average value per goal, ...)
+  // — averaged like a rate, but formatted as a plain ₹ amount, not a %.
+  const rupeeAvgMatchers = companyConfig.rupeeAvgRowMatchers || [];
+  const rupeeAvgKeys = new Set(kpiKeys.filter(k => rupeeAvgMatchers.some(re => re.test(k))));
 
   function sumFor(key, idxs) {
     const arr = kpis[key];
@@ -501,6 +647,32 @@ function buildDataset(parsed, companyInfo, companyConfig = COMPANY_CONFIGS.easyr
     const vals = idxs.map(i => arr[i]).filter(v => typeof v === "number");
     return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
   }
+  function lastNonNullInIdxs(arr, idxs) {
+    for (let j = idxs.length - 1; j >= 0; j--) {
+      const v = arr[idxs[j]];
+      if (typeof v === "number") return v;
+    }
+    return null;
+  }
+  function stockFor(key, idxs) {
+    return lastNonNullInIdxs(kpis[key], idxs);
+  }
+  function deltaFor(key, idxs) {
+    const arr = kpis[key];
+    const endVal = lastNonNullInIdxs(arr, idxs);
+    if (endVal === null) return null;
+    const minIdx = Math.min(...idxs);
+    let beforeVal = null;
+    for (let i = minIdx - 1; i >= 0; i--) {
+      if (typeof arr[i] === "number") { beforeVal = arr[i]; break; }
+    }
+    // No reading exists before this period (e.g. the sheet's very first
+    // period) — the "increase during the period" isn't reliably knowable
+    // (it would either be undercounted or falsely assume a zero baseline),
+    // so this is left null rather than guessed.
+    if (beforeVal === null) return null;
+    return endVal - beforeVal;
+  }
   function avgHC(idxs) {
     if (!headcount) return null;
     const vals = idxs.map(i => headcount[i]).filter(v => typeof v === "number");
@@ -508,7 +680,12 @@ function buildDataset(parsed, companyInfo, companyConfig = COMPANY_CONFIGS.easyr
   }
   function computeRow(groupMeta, idxs) {
     const row = { ...groupMeta };
-    kpiKeys.forEach(k => { row[k] = rateKeys.has(k) ? avgFor(k, idxs) : sumFor(k, idxs); });
+    kpiKeys.forEach(k => {
+      if (stockKeys.has(k)) row[k] = stockFor(k, idxs);
+      else if (deltaKeys.has(k)) row[k] = deltaFor(k, idxs);
+      else if (rateKeys.has(k) || rupeeAvgKeys.has(k)) row[k] = avgFor(k, idxs);
+      else row[k] = sumFor(k, idxs);
+    });
     row["Headcount"] = avgHC(idxs);
     // Guard every division on typeof === "number" for BOTH sides, not just
     // truthiness — `null / x` silently evaluates to 0 in JS, which would
@@ -528,7 +705,14 @@ function buildDataset(parsed, companyInfo, companyConfig = COMPANY_CONFIGS.easyr
 
   const cardConfigs = [];
   kpiKeys.forEach(k => cardConfigs.push({
-    key: k, label: k, fmt: rateKeys.has(k) ? fmtPct : countKeys.has(k) ? fmtNum : fmtCr, good: "up",
+    key: k,
+    label: k,
+    fmt: countKeys.has(k) ? fmtNum
+      : rupeeAvgKeys.has(k) ? fmtRupee
+      : alreadyCrKeys.has(k) ? fmtCrAlready
+      : rateKeys.has(k) ? fmtPct
+      : fmtCr,
+    good: "up",
     primary: k === revenueBaseKey || k === "EBITDA" || k === "Net Profit",
   }));
   if (hasRevenue && hasGP) cardConfigs.push({ key: "Gross Margin", label: "Gross Margin", fmt: fmtPct, good: "up", isMargin: true, marginOf: "Gross Profit" });
@@ -540,7 +724,8 @@ function buildDataset(parsed, companyInfo, companyConfig = COMPANY_CONFIGS.easyr
   return {
     months, kpis, headcount, kpiKeys, fyGroups, fyData, qGroups, qData, cardConfigs, hasRevenue, hasGP, hasEBITDA, hasNet, companyInfo,
     companyId: companyConfig.id, companyConfig, revenueBaseKey, revenueLabel, pnlRevenueSubLines: companyConfig.pnlRevenueSubLines || null,
-    rateKeys,
+    opexKey: companyConfig.opexKey || null,
+    rateKeys, stockKeys, deltaKeys, rupeeAvgKeys, alreadyCrKeys,
   };
 }
 
@@ -570,6 +755,47 @@ function fmtCrPlain(v, decimals = 1) {
   if (v === null || v === undefined || typeof v !== "number" || Number.isNaN(v)) return "N/A";
   const cr = v / 1e7;
   return cr.toLocaleString("en-IN", { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+}
+// Rows a source MIS already expresses in INR Cr (per that workbook's own Read
+// Me) — same ₹/Cr presentation as fmtCr, but WITHOUT the /1e7, since the raw
+// value is already in crores.
+function fmtCrAlready(v) {
+  if (v === null || v === undefined || typeof v !== "number" || Number.isNaN(v)) return "N/A";
+  const sign = v < 0 ? "-" : "";
+  const abs = Math.abs(v);
+  return `${sign}₹${abs.toFixed(abs >= 100 ? 0 : abs >= 10 ? 1 : 2)} Cr`;
+}
+// Plain per-unit rupee amount (e.g. cost per goal acquired, average value per
+// goal) — too small to express in Cr, and not a percentage either.
+function fmtRupee(v) {
+  if (v === null || v === undefined || typeof v !== "number" || Number.isNaN(v)) return "N/A";
+  return `₹${Math.round(v).toLocaleString("en-IN")}`;
+}
+
+/* ============================================================
+   TEMPORARY FALLBACK KPI DATA — a small number of KPIs (per
+   company) aren't yet reliably derivable from the uploaded MIS.
+   Each company config may carry a `fallbackKPIs: { slug: { FY24:
+   n, ..., Q4FY26: n } }` map, keyed by the exact fyData/qData
+   period `.key` (e.g. "FY24", "Q4FY26"). Priority is always:
+   real MIS value first, this fallback only when the real value is
+   null for that specific period — never the reverse. Values are
+   stored in the SAME units/scale the relevant formatter expects
+   (fractions for fmtPct, raw units for fmtCr/fmtCrPlain, Cr-native
+   for fmtCrAlready, plain numbers for fmtNum) so a fallback cell
+   renders through the exact same formatting call as a real one —
+   nothing in the UI marks it as a fallback, per spec.
+   This is explicitly temporary scaffolding for KPIs the MIS
+   doesn't cover yet; removing a company's fallbackKPIs entry (once
+   better source data exists) requires no other code change.
+   ============================================================ */
+function fallbackKPI(companyConfig, slug, periodKey) {
+  if (!slug) return null;
+  const map = companyConfig.fallbackKPIs?.[slug];
+  return map && typeof map[periodKey] === "number" ? map[periodKey] : null;
+}
+function withFallback(companyConfig, slug, periodKey, value) {
+  return typeof value === "number" ? value : fallbackKPI(companyConfig, slug, periodKey);
 }
 
 /* ============================================================
@@ -1063,9 +1289,9 @@ function ExportButton({ onClick, label = "Export to Excel" }) {
 const KPI_SEMANTIC_RULES = [
   // Order matters: most specific / least ambiguous concept first,
   // so it claims its line(s) before broader concepts get a look.
-  { label: "Campaign Management", match: /campaign/i },
-  { label: "Platform Revenue", match: /platform|software\s*revenue|saas\s*revenue|technology\s*revenue|subscription/i },
-  { label: "SetUp Revenue", match: /set[\s-]?up|onboard|deploy(ment)?|implementation|integration\s*revenue/i },
+  { label: "Campaign Management", slug: "campaignManagement", match: /campaign/i },
+  { label: "Platform Revenue", slug: "platformRevenue", match: /platform|software\s*revenue|saas\s*revenue|technology\s*revenue|subscription/i },
+  { label: "SetUp Revenue", slug: "setupRevenue", match: /set[\s-]?up|onboard|deploy(ment)?|implementation|integration\s*revenue/i },
 ];
 
 function KeyPerformanceIndicatorsTable({ ds }) {
@@ -1079,9 +1305,11 @@ function KeyPerformanceIndicatorsTable({ ds }) {
   const rows = KPI_SEMANTIC_RULES.map(rule => {
     const matchedKeys = revenueLines.filter(k => !claimed.has(k) && rule.match.test(k));
     matchedKeys.forEach(k => claimed.add(k));
-    return { label: rule.label, matchedKeys };
+    return { label: rule.label, slug: rule.slug, matchedKeys };
   });
-  const unmatched = rows.filter(r => !r.matchedKeys.length);
+  // A row only needs the "no matching line in this workbook" footnote if it
+  // has neither a real match NOR a provided fallback value for any period.
+  const unmatched = rows.filter(r => !r.matchedKeys.length && !ds.companyConfig.fallbackKPIs?.[r.slug]);
 
   function valueFor(p, keys) {
     let sum = 0, has = false;
@@ -1115,11 +1343,14 @@ function KeyPerformanceIndicatorsTable({ ds }) {
               <tr key={row.label}>
                 <td className="fin-table__label-col">{row.label}</td>
                 {periods.map(p => {
-                  if (!row.matchedKeys.length) return <td key={p.key} className="fin-table__na">N/A</td>;
-                  const raw = valueFor(p, row.matchedKeys);
-                  const total = p[ds.revenueBaseKey];
-                  const pct = (typeof raw === "number" && typeof total === "number" && total !== 0) ? raw / total : null;
-                  return <td key={p.key}>{fmtPct(pct)}</td>;
+                  let pct = null;
+                  if (row.matchedKeys.length) {
+                    const raw = valueFor(p, row.matchedKeys);
+                    const total = p[ds.revenueBaseKey];
+                    pct = (typeof raw === "number" && typeof total === "number" && total !== 0) ? raw / total : null;
+                  }
+                  const val = withFallback(ds.companyConfig, row.slug, p.key, pct);
+                  return <td key={p.key}>{fmtPct(val)}</td>;
                 })}
               </tr>
             ))}
@@ -1160,7 +1391,12 @@ function GrayQuestKPITable({ ds }) {
 
   const totalKey = ds.kpiKeys.find(k => cfg.totalMatch.test(k)) || null;
   const shareRows = cfg.shareRows.map(r => ({ ...r, matchedKey: ds.kpiKeys.find(k => r.match.test(k)) || null }));
-  const unmatched = shareRows.filter(r => !r.matchedKey);
+  // The total row's provided fallback (if any) is a ₹-Cr disbursal-*amount*
+  // figure, while this row displays a loan *count* — a genuine unit mismatch
+  // with no clean fallback path, so it's deliberately left un-wired here. In
+  // practice this never matters: every GrayQuest workbook seen so far has a
+  // reliable "Loan Disbursals" count row, so this total is always MIS-derived.
+  const unmatched = shareRows.filter(r => !r.matchedKey && !ds.companyConfig.fallbackKPIs?.[r.slug]);
 
   return (
     <section className="section">
@@ -1194,11 +1430,14 @@ function GrayQuestKPITable({ ds }) {
               <tr key={row.label}>
                 <td className="fin-table__label-col">{row.label}</td>
                 {periods.map(p => {
-                  if (!row.matchedKey || !totalKey) return <td key={p.key} className="fin-table__na">N/A</td>;
-                  const raw = p[row.matchedKey];
-                  const total = p[totalKey];
-                  const pct = (typeof raw === "number" && typeof total === "number" && total !== 0) ? raw / total : null;
-                  return <td key={p.key}>{fmtPct(pct)}</td>;
+                  let pct = null;
+                  if (row.matchedKey && totalKey) {
+                    const raw = p[row.matchedKey];
+                    const total = p[totalKey];
+                    pct = (typeof raw === "number" && typeof total === "number" && total !== 0) ? raw / total : null;
+                  }
+                  const val = withFallback(ds.companyConfig, row.slug, p.key, pct);
+                  return <td key={p.key}>{fmtPct(val)}</td>;
                 })}
               </tr>
             ))}
@@ -1245,7 +1484,7 @@ function RiskcovryKPITable({ ds }) {
     ...r,
     matchedKey: ds.kpiKeys.find(k => r.matchers.some(re => re.test(k))) || null,
   }));
-  const unmatched = rows.filter(r => !r.matchedKey);
+  const unmatched = rows.filter(r => !r.matchedKey && !ds.companyConfig.fallbackKPIs?.[r.slug]);
 
   return (
     <section className="section">
@@ -1273,17 +1512,19 @@ function RiskcovryKPITable({ ds }) {
               <React.Fragment key={row.label}>
                 <tr>
                   <td className="fin-table__label-col">{row.label}</td>
-                  {periods.map(p => (
-                    <td key={p.key}>{row.matchedKey ? fmtCrPlain(p[row.matchedKey], row.decimals) : <span className="fin-table__na">N/A</span>}</td>
-                  ))}
+                  {periods.map(p => {
+                    const raw = row.matchedKey ? p[row.matchedKey] : null;
+                    const val = withFallback(ds.companyConfig, row.slug, p.key, raw);
+                    return <td key={p.key}>{fmtCrPlain(val, row.decimals)}</td>;
+                  })}
                 </tr>
                 <tr>
                   <td className="fin-table__label-col">% Growth YoY</td>
-                  {periods.map((p, i) => (
-                    <td key={p.key}>
-                      {row.matchedKey ? <GrowthBadge value={periodGrowth(periods, i, row.matchedKey, quarterly)} /> : <span className="fin-table__na">N/A</span>}
-                    </td>
-                  ))}
+                  {periods.map((p, i) => {
+                    const g = row.matchedKey ? periodGrowth(periods, i, row.matchedKey, quarterly) : null;
+                    const val = withFallback(ds.companyConfig, row.growthSlug, p.key, g);
+                    return <td key={p.key}><GrowthBadge value={val} /></td>;
+                  })}
                 </tr>
               </React.Fragment>
             ))}
@@ -1295,6 +1536,77 @@ function RiskcovryKPITable({ ds }) {
           <Info size={12} style={{ flexShrink: 0, position: "relative", top: 1 }} />
           No row matching {unmatched.map(r => `"${r.label.replace(" (In Cr.)", "")}"`).join(" or ")} was found in this
           workbook — shown as N/A rather than a guessed figure.
+        </div>
+      )}
+    </section>
+  );
+}
+
+/* ============================================================
+   MULTIPL KEY PERFORMANCE INDICATORS — three flat value rows
+   (Total Downloads, Total Goals, Amt of Goals), no growth
+   sub-rows (unlike Riskcovry's table). "Total Goals" reads off a
+   delta-of-cumulative aggregation and "Amt of Goals" off a
+   stock/last-value aggregation — both computed once in
+   buildDataset (via deltaRowMatchers/stockRowMatchers/
+   alreadyCrRowMatchers) so this component just displays whatever
+   ds.fyData/ds.qData already computed, falling back to the
+   company's provided reference data only where the MIS itself has
+   no reading for that specific period.
+   ============================================================ */
+function MultiplKPITable({ ds }) {
+  const [mode, setMode] = useState("quarterly");
+  const cfg = ds.companyConfig.kpi;
+  if (!cfg || !cfg.rows) return null;
+  const periods = periodsFor(ds, mode);
+  const quarterly = mode === "quarterly";
+
+  const rows = cfg.rows.map(r => ({
+    ...r,
+    matchedKey: ds.kpiKeys.find(k => r.matchers.some(re => re.test(k))) || null,
+  }));
+  const unmatched = rows.filter(r => !r.matchedKey && !ds.companyConfig.fallbackKPIs?.[r.slug]);
+
+  return (
+    <section className="section">
+      <div className="fin-section__head">
+        <div className="section__title">Key Performance Indicators</div>
+        <PeriodToggle mode={mode} onChange={setMode} />
+      </div>
+      <div className="fin-table-wrap fin-table-wrap--kpi">
+        <table className="fin-table fin-table--kpi">
+          <thead>
+            <tr>
+              <th className="fin-table__label-col">KPI</th>
+              {periods.map(p => (
+                <th key={p.key}>
+                  {p.label.replace(" (partial)", "")}
+                  {quarterly
+                    ? (!p.complete ? <span className="fin-table__partial"> (partial)</span> : "")
+                    : (p.partial ? <span className="fin-table__partial"> (partial)</span> : "")}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map(row => (
+              <tr key={row.label}>
+                <td className="fin-table__label-col">{row.label}</td>
+                {periods.map(p => {
+                  const raw = row.matchedKey ? p[row.matchedKey] : null;
+                  const val = withFallback(ds.companyConfig, row.slug, p.key, raw);
+                  return <td key={p.key}>{row.fmt(val)}</td>;
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {unmatched.length > 0 && (
+        <div className="fin-table__foot-note">
+          <Info size={12} style={{ flexShrink: 0, position: "relative", top: 1 }} />
+          No row matching {unmatched.map(r => `"${r.label}"`).join(" or ")} was found in this workbook — shown as N/A
+          rather than a guessed figure.
         </div>
       )}
     </section>
@@ -1387,7 +1699,13 @@ function ProfitAndLossTable({ ds }) {
     ? ds.kpiKeys.filter(k => ds.pnlRevenueSubLines.some(re => re.test(k)))
     : ds.kpiKeys.filter(k => /revenue/i.test(k) && k !== ds.revenueBaseKey);
   const hasDirect = ds.kpiKeys.includes("Direct Expenses");
-  const hasIndirect = ds.kpiKeys.includes("Indirect Expenses");
+  // Most companies' operating-expense line is literally named "Indirect
+  // Expenses"; a company whose MIS uses different terminology (e.g. MULTIPL's
+  // "Total Operating Costs", which stands alone with no Gross Profit split)
+  // can override via companyConfig.opexKey rather than forcing an
+  // "Indirect Expenses" row that doesn't exist in its sheet.
+  const opexKey = ds.opexKey || "Indirect Expenses";
+  const hasIndirect = ds.kpiKeys.includes(opexKey);
 
   const sections = [
     {
@@ -1408,7 +1726,7 @@ function ProfitAndLossTable({ ds }) {
     ds.hasEBITDA && {
       heading: "Operating Expenses",
       rows: [
-        hasIndirect && { label: "Indirect Expenses", key: "Indirect Expenses", type: "currency" },
+        hasIndirect && { label: opexKey, key: opexKey, type: "currency" },
         { label: "EBITDA", key: "EBITDA", type: "currency", subtotal: true },
         { label: "EBITDA Margin %", key: "EBITDA Margin", type: "percent", subtotal: true },
       ].filter(Boolean),
@@ -2322,6 +2640,153 @@ function RiskcovryCommentary({ ds }) {
   );
 }
 
+/* ============================================================
+   MULTIPL PERFORMANCE COMMENTARY — revenue trend/volatility, EBITDA
+   / burn, goal-creation growth + average goal value, and adoption
+   metrics (AUA / signups / brand partners) where available. Unlike
+   GrayQuest/Riskcovry's commentary, this deliberately does NOT
+   touch "Total Downloads" — that concept has no MIS row at all in
+   this workbook, and the fallback KPI data is reserved for the
+   dedicated KPI table (per spec), not narrative claims: making a
+   qualitative "downloads grew" statement here would go beyond what
+   the uploaded MIS itself can support.
+   ============================================================ */
+function MultiplCommentary({ ds }) {
+  const { latestQ, prevYearQ, latestFY, prevFY } = getExecStats(ds);
+  const revKey = ds.revenueBaseKey;
+
+  const revYoY = latestQ && prevYearQ && typeof latestQ[revKey] === "number" && typeof prevYearQ[revKey] === "number" && prevYearQ[revKey]
+    ? ((latestQ[revKey] - prevYearQ[revKey]) / Math.abs(prevYearQ[revKey])) * 100 : null;
+
+  const ebitdaCurr = latestFY && typeof latestFY["EBITDA"] === "number" ? latestFY["EBITDA"] : null;
+  const ebitdaPrev = prevFY && typeof prevFY["EBITDA"] === "number" ? prevFY["EBITDA"] : null;
+  const ebitdaTrend = describeEbitdaTrend(ebitdaCurr, ebitdaPrev);
+
+  // No Gross Profit or Net Profit rows in this workbook, so bestMarginKey
+  // resolves to EBITDA Margin — the only margin concept this MIS supports.
+  const marginPick = bestMarginKey(ds);
+  const marginFYIdx = latestFY ? ds.fyData.findIndex(f => f.key === latestFY.key) : -1;
+  const marginPrevFY = marginFYIdx > 0 ? ds.fyData[marginFYIdx - 1] : null;
+  const marginCurr = marginPick && latestFY ? latestFY[marginPick[0]] : null;
+  const marginPrev = marginPick && marginPrevFY ? marginPrevFY[marginPick[0]] : null;
+
+  // "Goals Created" is aggregated as a period delta (deltaRowMatchers) — this
+  // is genuinely "goals created within the FY", not a cumulative total.
+  const goalsKey = ds.kpiKeys.find(k => /goals\s*created/i.test(k)) || null;
+  const goalsCurr = goalsKey && latestFY && typeof latestFY[goalsKey] === "number" ? latestFY[goalsKey] : null;
+  const goalsPrev = goalsKey && prevFY && typeof prevFY[goalsKey] === "number" ? prevFY[goalsKey] : null;
+  const goalsGrowth = (typeof goalsCurr === "number" && typeof goalsPrev === "number" && goalsPrev !== 0)
+    ? ((goalsCurr - goalsPrev) / Math.abs(goalsPrev)) * 100 : null;
+
+  const avgGoalKey = ds.kpiKeys.find(k => /average\s*goal\s*value/i.test(k)) || null;
+  const avgGoalCurr = avgGoalKey && latestFY && typeof latestFY[avgGoalKey] === "number" ? latestFY[avgGoalKey] : null;
+  const avgGoalPrev = avgGoalKey && prevFY && typeof prevFY[avgGoalKey] === "number" ? prevFY[avgGoalKey] : null;
+
+  const auaKey = ds.kpiKeys.find(k => /assets\s*under\s*advice/i.test(k)) || null;
+  const auaCurr = auaKey && latestFY && typeof latestFY[auaKey] === "number" ? latestFY[auaKey] : null;
+  const auaPrev = auaKey && prevFY && typeof prevFY[auaKey] === "number" ? prevFY[auaKey] : null;
+  const auaGrowth = (typeof auaCurr === "number" && typeof auaPrev === "number" && auaPrev !== 0)
+    ? ((auaCurr - auaPrev) / Math.abs(auaPrev)) * 100 : null;
+
+  const signupsKey = ds.kpiKeys.find(k => /^signups$/i.test(k)) || null;
+  const signupsCurr = signupsKey && latestFY && typeof latestFY[signupsKey] === "number" ? latestFY[signupsKey] : null;
+
+  const brandKey = ds.kpiKeys.find(k => /brand\s*partners/i.test(k)) || null;
+  const brandCurr = brandKey && latestFY && typeof latestFY[brandKey] === "number" ? latestFY[brandKey] : null;
+  const brandPrev = brandKey && prevFY && typeof prevFY[brandKey] === "number" ? prevFY[brandKey] : null;
+
+  return (
+    <section className="section narrative-section">
+      <div className="section__title">Performance Commentary</div>
+      <div className="narrative-grid">
+        <div className="narrative-card">
+          <div className="narrative-card__eyebrow">Growth &amp; adoption</div>
+          <div className="narrative-bullets">
+            <div className="narrative-bullet">
+              <span className="narrative-bullet__icon"><TrendingUp size={15} /></span>
+              <span>
+                {latestQ && prevYearQ && revYoY !== null ? (
+                  <><strong>{latestQ.label}</strong> closed with {(ds.revenueLabel || "revenue").toLowerCase()} of{" "}
+                  <strong>{fmtCr(latestQ[revKey])}</strong>, {revYoY >= 0 ? "up" : "down"} {Math.abs(revYoY).toFixed(1)}% versus{" "}
+                  {fmtCr(prevYearQ[revKey])} in {prevYearQ.label}{Math.abs(revYoY) > 40 ? " — quarterly revenue has shown meaningful volatility" : ""}.</>
+                ) : (
+                  <>{ds.revenueLabel || "Revenue"} data isn't complete enough yet to compute a like-for-like quarterly YoY comparison.</>
+                )}
+              </span>
+            </div>
+            <div className="narrative-bullet">
+              <span className="narrative-bullet__icon"><Rocket size={15} /></span>
+              <span>
+                {latestFY && prevFY && ebitdaTrend ? (
+                  <>FY EBITDA {ebitdaTrend} from <strong>{fmtCr(ebitdaPrev)}</strong> in {prevFY.label} to{" "}
+                  <strong>{fmtCr(ebitdaCurr)}</strong> in {latestFY.label}
+                  {marginPick && typeof marginCurr === "number" ? <>, with {marginPick[0].toLowerCase()} at <strong>{fmtPct(marginCurr)}</strong>
+                  {typeof marginPrev === "number" ? <> versus {fmtPct(marginPrev)} the prior FY</> : ""}</> : ""}
+                  {" "}— consistent with continued investment ahead of monetisation.</>
+                ) : (
+                  <>Not enough complete fiscal years of EBITDA yet to describe a trend.</>
+                )}
+              </span>
+            </div>
+            <div className="narrative-bullet">
+              <span className="narrative-bullet__icon"><Layers size={15} /></span>
+              <span>
+                {goalsKey && latestFY && typeof goalsCurr === "number" ? (
+                  <>Goals created {goalsGrowth !== null ? <>{goalsGrowth >= 0 ? "grew" : "declined"} <strong>{Math.abs(goalsGrowth).toFixed(1)}%</strong> YoY to</> : "reached"}{" "}
+                  <strong>{fmtNum(goalsCurr)}</strong> in {latestFY.label}
+                  {typeof goalsPrev === "number" ? <>, from {fmtNum(goalsPrev)} in {prevFY.label}</> : ""}
+                  {typeof avgGoalCurr === "number" ? <>, while average goal value stood at <strong>{fmtRupee(avgGoalCurr)}</strong>
+                  {typeof avgGoalPrev === "number" ? <> (versus {fmtRupee(avgGoalPrev)} the prior FY)</> : ""}</> : ""}.</>
+                ) : (
+                  <>Goal-creation data isn't complete enough yet to compute a YoY comparison.</>
+                )}
+              </span>
+            </div>
+            {(typeof auaCurr === "number" || typeof signupsCurr === "number" || typeof brandCurr === "number") && (
+              <div className="narrative-bullet">
+                <span className="narrative-bullet__icon"><Users size={15} /></span>
+                <span>
+                  {typeof auaCurr === "number" && (
+                    <>Assets Under Advice reached <strong>{fmtCrAlready(auaCurr)}</strong> as of {latestFY?.label}
+                    {auaGrowth !== null ? <>, up {auaGrowth.toFixed(1)}% versus {fmtCrAlready(auaPrev)} the prior FY-end</> : ""}. </>
+                  )}
+                  {typeof signupsCurr === "number" && <>Cumulative signups stood at <strong>{fmtNum(signupsCurr)}</strong> as of {latestFY?.label}. </>}
+                  {typeof brandCurr === "number" && (
+                    <>Active brand partners totalled <strong>{fmtNum(brandCurr)}</strong> as of {latestFY?.label}
+                    {typeof brandPrev === "number" ? <>, versus {fmtNum(brandPrev)} the prior FY-end</> : ""}.</>
+                  )}
+                </span>
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="narrative-stat-col">
+          <div className="stat-tile">
+            <div className="stat-tile__label">Latest quarter vs prior year</div>
+            <div className="stat-tile__value">{latestQ ? fmtCr(latestQ[revKey]) : "N/A"}</div>
+            <div className="stat-tile__sub">
+              {latestQ ? latestQ.label : "—"} {(ds.revenueLabel || "revenue").toLowerCase()} {revYoY !== null && <Delta curr={latestQ?.[revKey]} prev={prevYearQ?.[revKey]} good="up" />}
+            </div>
+          </div>
+          <div className="stat-tile">
+            <div className="stat-tile__label">FY EBITDA</div>
+            <div className="stat-tile__value">{latestFY ? fmtCr(latestFY["EBITDA"]) : "N/A"}</div>
+            <div className="stat-tile__sub">
+              {latestFY ? `${latestFY.label}${ebitdaTrend ? `, ${ebitdaTrend} from ${fmtCr(ebitdaPrev)} prior FY` : ""}` : "—"}
+            </div>
+          </div>
+          <div className="stat-tile">
+            <div className="stat-tile__label">Goals Created</div>
+            <div className="stat-tile__value">{typeof goalsCurr === "number" ? fmtNum(goalsCurr) : "N/A"}</div>
+            <div className="stat-tile__sub">{latestFY ? `${latestFY.label}${goalsGrowth !== null ? `, ${goalsGrowth >= 0 ? "+" : ""}${goalsGrowth.toFixed(1)}% YoY` : ""}` : "—"}</div>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 const CHIP_ICONS = [Layers, ShieldCheck, Target, Info];
 const SCALE_ICONS = [Building2, Store, Users];
 
@@ -2520,6 +2985,12 @@ export default function App() {
               <RevenueProfitabilityTable ds={dataset} />
               <RiskcovryCommentary ds={dataset} />
               <RiskcovryKPITable ds={dataset} />
+            </>
+          ) : dataset.companyConfig.layout === "multipl" ? (
+            <>
+              <MultiplKPITable ds={dataset} />
+              <RevenueProfitabilityTable ds={dataset} title="Key Financial Highlights" />
+              <MultiplCommentary ds={dataset} />
             </>
           ) : (
             <>
