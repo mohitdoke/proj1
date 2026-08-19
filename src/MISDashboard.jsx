@@ -806,26 +806,71 @@ function periodsFor(ds, mode) {
   return mode === "quarterly" ? ds.qData : ds.fyData;
 }
 
+/* ------------------------------------------------------------
+   EXPORT TO EXCEL — every export below is built from an
+   array-of-arrays of the exact strings already on screen (same
+   fmtCr/fmtPct/fmtPctSigned calls, same row/period arrays), so the
+   downloaded .xlsx can never disagree with what the table shows.
+   Client-side only (SheetJS writeFile triggers a normal browser
+   download) — no server involved, consistent with the rest of
+   this app.
+   ------------------------------------------------------------ */
+function buildExportFilename(ds, suffix) {
+  const company = (ds.companyInfo?.companyName || "Dashboard").replace(/[^a-z0-9]+/gi, "_");
+  const stamp = new Date().toISOString().slice(0, 10);
+  return `${company}_${suffix}_${stamp}.xlsx`;
+}
+
+function exportAoaToExcel(filename, sheetName, aoa) {
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  const colCount = aoa.reduce((max, row) => Math.max(max, row.length), 0);
+  ws["!cols"] = Array.from({ length: colCount }, (_, i) => ({ wch: i === 0 ? 26 : 15 }));
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, sheetName.slice(0, 31));
+  XLSX.writeFile(wb, filename);
+}
+
+function ExportButton({ onClick, label = "Export to Excel" }) {
+  return (
+    <button type="button" className="export-btn" onClick={onClick}>
+      <FileSpreadsheet size={13} /> {label}
+    </button>
+  );
+}
+
 /* ============================================================
    KEY PERFORMANCE INDICATORS — revenue-mix table (business-line
    revenue as a % of Total Revenue), aggregated per FY/quarter the
    same way as every other table here (sum-of-period first, then
    divide — never an average of monthly percentages).
 
-   Row → source-column matching is done by flexible keyword search
-   against whatever KPI labels are actually present in the uploaded
-   sheet ("Do not assume fixed row numbers"). If a company's sheet
-   has no line item matching a row, that row renders N/A for every
-   period rather than guessing which existing line it might mean —
-   the workbooks this dashboard has been tested against split
-   revenue by customer segment (e.g. "Retail/B2B Revenue", "Banking
-   Revenue"), not by "Platform" / "SetUp", so those two rows will
-   show N/A until a sheet actually has a matching line item.
+   Row → source-column matching is semantic, not a single literal
+   string: each KPI concept carries a small synonym set (a company
+   might call it "Platform Revenue", "SaaS Revenue", "Subscription
+   Revenue", etc.) and is matched against every *revenue* line in
+   the uploaded sheet (Total Revenue itself is excluded — it's the
+   denominator, never a component). Every kpiKey can be claimed by
+   at most one KPI row (first rule to match wins), so the same
+   revenue line is never summed into two different KPIs.
+
+   If, after that synonym search, a KPI still has zero matching
+   revenue lines, it renders N/A rather than falling back to an
+   unrelated line — e.g. this dashboard has been tested against a
+   workbook that splits revenue by client segment ("Retail/B2B
+   Revenue", "Banking Revenue") rather than by fee type, and there
+   is no reliable way to know what fraction of a client-segment
+   total is recurring platform/subscription fee vs. one-time setup
+   fee vs. something else — collapsing "everything that isn't
+   Campaign Management" into "Platform Revenue" would be a guess
+   dressed up as a number, which is exactly what this table must
+   never do.
    ============================================================ */
-const KPI_TABLE_ROWS = [
-  { label: "Platform Revenue", match: /platform/i },
-  { label: "SetUp Revenue", match: /set[\s-]?up/i },
+const KPI_SEMANTIC_RULES = [
+  // Order matters: most specific / least ambiguous concept first,
+  // so it claims its line(s) before broader concepts get a look.
   { label: "Campaign Management", match: /campaign/i },
+  { label: "Platform Revenue", match: /platform|software\s*revenue|saas\s*revenue|technology\s*revenue|subscription/i },
+  { label: "SetUp Revenue", match: /set[\s-]?up|onboard|deploy(ment)?|implementation|integration\s*revenue/i },
 ];
 
 function KeyPerformanceIndicatorsTable({ ds }) {
@@ -834,8 +879,20 @@ function KeyPerformanceIndicatorsTable({ ds }) {
   const periods = periodsFor(ds, mode);
   const quarterly = mode === "quarterly";
 
-  const rows = KPI_TABLE_ROWS.map(r => ({ ...r, matchedKey: ds.kpiKeys.find(k => r.match.test(k)) || null }));
-  const unmatched = rows.filter(r => !r.matchedKey);
+  const revenueLines = ds.kpiKeys.filter(k => k !== "Total Revenue" && /revenue/i.test(k));
+  const claimed = new Set();
+  const rows = KPI_SEMANTIC_RULES.map(rule => {
+    const matchedKeys = revenueLines.filter(k => !claimed.has(k) && rule.match.test(k));
+    matchedKeys.forEach(k => claimed.add(k));
+    return { label: rule.label, matchedKeys };
+  });
+  const unmatched = rows.filter(r => !r.matchedKeys.length);
+
+  function valueFor(p, keys) {
+    let sum = 0, has = false;
+    keys.forEach(k => { const v = p[k]; if (typeof v === "number") { sum += v; has = true; } });
+    return has ? sum : null;
+  }
 
   return (
     <section className="section">
@@ -863,8 +920,8 @@ function KeyPerformanceIndicatorsTable({ ds }) {
               <tr key={row.label}>
                 <td className="fin-table__label-col">{row.label}</td>
                 {periods.map(p => {
-                  if (!row.matchedKey) return <td key={p.key} className="fin-table__na">N/A</td>;
-                  const raw = p[row.matchedKey];
+                  if (!row.matchedKeys.length) return <td key={p.key} className="fin-table__na">N/A</td>;
+                  const raw = valueFor(p, row.matchedKeys);
                   const total = p["Total Revenue"];
                   const pct = (typeof raw === "number" && typeof total === "number" && total !== 0) ? raw / total : null;
                   return <td key={p.key}>{fmtPct(pct)}</td>;
@@ -877,9 +934,9 @@ function KeyPerformanceIndicatorsTable({ ds }) {
       {unmatched.length > 0 && (
         <div className="fin-table__foot-note">
           <Info size={12} style={{ flexShrink: 0, position: "relative", top: 1 }} />
-          {unmatched.map(r => r.label).join(" and ")} {unmatched.length > 1 ? "have" : "has"} no matching line item in
-          this workbook's Monthly Data — shown as N/A rather than estimated. Add a row named accordingly (e.g. containing
-          "Platform" or "Setup") to populate it.
+          {unmatched.map(r => r.label).join(" and ")} {unmatched.length > 1 ? "have" : "has"} no revenue line in this
+          workbook that reliably matches that concept (by name or common synonym) — shown as N/A rather than guessed,
+          since this workbook currently splits revenue by client segment, not by fee type.
         </div>
       )}
     </section>
@@ -901,11 +958,38 @@ function RevenueProfitabilityTable({ ds }) {
     ds.hasEBITDA && { label: "EBITDA Margin", key: "EBITDA Margin", type: "percent" },
   ].filter(Boolean);
 
+  // Cell values below are computed with the exact same helpers used to
+  // render the table (fmtCr / fmtPct / periodGrowth+fmtPctSigned) — the
+  // export can never drift from what's on screen because it reads the
+  // same `rows`/`periods` this render pass already built.
+  const handleExport = () => {
+    const header = ["Metric", ...periods.map(p => p.label)];
+    const aoa = [header, ...rows.map(row => [
+      row.label,
+      ...periods.map((p, i) => {
+        if (row.type === "growth") {
+          const g = periodGrowth(periods, i, row.key, quarterly);
+          return g === null ? "N/A" : fmtPctSigned(g * 100);
+        }
+        const v = p[row.key];
+        return row.type === "percent" ? fmtPct(v) : fmtCr(v);
+      }),
+    ])];
+    exportAoaToExcel(
+      buildExportFilename(ds, `Revenue_Profitability_${quarterly ? "Quarterly" : "Yearly"}`),
+      "Revenue & Profitability",
+      aoa
+    );
+  };
+
   return (
     <section className="section">
       <div className="fin-section__head">
         <div className="section__title">Revenue &amp; Profitability</div>
-        <PeriodToggle mode={mode} onChange={setMode} />
+        <div className="fin-section__controls">
+          <PeriodToggle mode={mode} onChange={setMode} />
+          <ExportButton onClick={handleExport} />
+        </div>
       </div>
       <div className="fin-table-wrap">
         <table className="fin-table">
@@ -978,11 +1062,33 @@ function ProfitAndLossTable({ ds }) {
     },
   ].filter(Boolean);
 
+  const handleExport = () => {
+    const header = ["Line item", ...periods.map(p => p.label)];
+    const aoa = [header];
+    sections.forEach(sec => {
+      aoa.push([sec.heading, ...periods.map(() => "")]);
+      sec.rows.forEach(row => {
+        aoa.push([row.label, ...periods.map(p => {
+          const v = p[row.key];
+          return row.type === "percent" ? fmtPct(v) : fmtCr(v);
+        })]);
+      });
+    });
+    exportAoaToExcel(
+      buildExportFilename(ds, `Complete_PnL_${quarterly ? "Quarterly" : "Yearly"}`),
+      "Profit & Loss",
+      aoa
+    );
+  };
+
   return (
     <section className="section">
       <div className="fin-section__head">
         <div className="section__title">Profit &amp; Loss Statement</div>
-        <PeriodToggle mode={mode} onChange={setMode} />
+        <div className="fin-section__controls">
+          <PeriodToggle mode={mode} onChange={setMode} />
+          <ExportButton onClick={handleExport} />
+        </div>
       </div>
       <div className="fin-table-wrap">
         <table className="fin-table fin-table--pnl">
@@ -1722,10 +1828,11 @@ export default function App() {
 
       {section === "performance" && (
         <>
+          <BusinessDescription companyInfo={dataset.companyInfo} />
+
           <RevenueProfitabilityTable ds={dataset} />
 
           <ExecutiveSummary ds={dataset} />
-          <BusinessDescription companyInfo={dataset.companyInfo} />
 
           <KeyPerformanceIndicatorsTable ds={dataset} />
 
@@ -1987,6 +2094,11 @@ function GlobalStyles() {
       /* ---- financial tables (Revenue & Profitability, P&L) ---- */
       .fin-section__head { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px; margin-bottom:16px; }
       .fin-section__head .section__title { margin-bottom:0; }
+      .fin-section__controls { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+
+      .export-btn { display:flex; align-items:center; gap:6px; font-family:'IBM Plex Mono',monospace; font-size:11.5px; font-weight:500; color:var(--brand);
+                    border:1px solid var(--brand); border-radius:9px; padding:8px 12px; cursor:pointer; background:#fff; transition:background .15s, color .15s; white-space:nowrap; }
+      .export-btn:hover { background:var(--brand); color:#fff; }
 
       .period-toggle { display:flex; gap:4px; background:var(--surface); padding:4px; border-radius:10px; border:1px solid var(--border); flex-shrink:0; }
       .period-toggle__btn { font-family:'IBM Plex Mono',monospace; font-size:12px; padding:7px 14px; border-radius:7px; border:none; background:transparent; color:var(--muted); cursor:pointer; transition:all .15s; white-space:nowrap; }
