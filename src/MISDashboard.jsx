@@ -52,10 +52,18 @@ function parseWorkbook(wb) {
     const row = rows[r];
     const label = row && row[0] != null ? String(row[0]).trim() : "";
     if (!label) continue;
+    // A row is a genuine KPI row if every month-column cell is either a number or
+    // blank. If any month cell holds text (e.g. a stray "Source / units note" row
+    // some workbooks tuck under a month column), treat the whole row as metadata
+    // and skip it — otherwise it would surface as a bogus all-N/A "KPI" card.
+    let hasText = false;
     const values = monthCols.map(mc => {
       const v = row[mc.col];
-      return typeof v === "number" && !isNaN(v) ? v : null;
+      if (typeof v === "number" && !isNaN(v)) return v;
+      if (v != null && String(v).trim() !== "") hasText = true;
+      return null;
     });
+    if (hasText) continue;
     if (/^headcount$/i.test(label)) headcount = values;
     else kpis[label] = values;
   }
@@ -245,6 +253,87 @@ function parseRefreshMeta(wb) {
   };
 }
 
+/* ============================================================
+   COMPANY CONFIGURATION LAYER — this is what turns the dashboard
+   into a multi-company engine instead of an Easyrewardz-only app.
+   The uploaded workbook is inspected for company-specific "signal"
+   row names; whichever company scores the most signal matches (at
+   or above a minimum confidence threshold) supplies its config for
+   this render. If nothing scores high enough, the app falls back
+   to the original Easyrewardz-shaped config, which is intentionally
+   generic enough to already be the safe default for an unrecognized
+   company's sheet (this is exactly the behaviour the app had before
+   GrayQuest was added, so nothing regresses for a third, unknown
+   company later).
+
+   A config never contains financial VALUES — only which row(s) to
+   look at and how to label them. Every number on screen still comes
+   from the uploaded sheet at render time.
+   ============================================================ */
+const COMPANY_CONFIGS = {
+  easyrewardz: {
+    id: "easyrewardz",
+    // Company Info sheet (if present) always wins; this is only a
+    // fallback so the page isn't blank when one isn't uploaded.
+    defaultDescription: null,
+    signals: [/retail\s*\/?\s*b2b\s*revenue/i, /banking\s*revenue/i, /campaign\s*mgmt\s*revenue/i, /campaign\s*management\s*revenue/i],
+    revenueBaseKey: "Total Revenue",
+    revenueLabel: "Revenue",
+    priorityOrder: ["Total Revenue", "Direct Expenses", "Gross Profit", "Indirect Expenses", "EBITDA", "Net Profit"],
+    pnlRevenueSubLines: null, // null = default behaviour: every "*Revenue*" row except the base
+    layout: "easyrewardz",
+  },
+  grayquest: {
+    id: "grayquest",
+    defaultDescription: {
+      companyName: "GrayQuest",
+      description: "GrayQuest Education Finance Private Limited is an education-finance platform offering fee-payment " +
+        "solutions for K-12 schools, colleges and universities. It enables parents and guardians to pay school and " +
+        "institution fees through monthly instalments, partners directly with educational institutions, and uses its " +
+        "own underwriting and credit-assessment process to provide education financing.",
+      tags: ["Education FinTech", "Fee-Payment Platform", "Instalment Financing"],
+      scaleMetrics: [],
+      strategicNote: null,
+    },
+    signals: [/schools\s*loan\s*disbursals/i, /higher\s*education\s*loan\s*disbursals/i, /edtech\s*platforms?\s*loan\s*disbursals/i, /^loan\s*disbursals$/i],
+    revenueBaseKey: "Net Revenue",
+    revenueLabel: "Net Revenue",
+    priorityOrder: ["Net Revenue", "Gross Profit", "EBITDA", "Direct Expenses", "Indirect Expenses", "Net Profit", "Loan Disbursals", "Loan Amount"],
+    // Explicit allow-list: GrayQuest's "Total Revenue" / "Gross Revenue" are derived
+    // totals, not additive sub-lines of Net Revenue, so the default "any *Revenue*
+    // row" heuristic would misrepresent the P&L. Only these genuinely roll up.
+    pnlRevenueSubLines: [/^schools\s*revenue$/i, /^higher\s*education\s*revenue$/i, /^edtech\s*platforms?\s*revenue$/i, /^ancillary\s*income$/i],
+    // Rate/ratio rows — averaged per period, not summed (see buildDataset).
+    rateRowMatchers: [/take\s*rate/i, /loan\s*irr/i, /cost\s*of\s*funds?/i],
+    // Loan-count rows (as opposed to loan-₹-amount rows) — formatted as a plain
+    // number on Key Metrics cards instead of ₹ Cr, which would otherwise divide
+    // a count like 170,646 by 1e7 and show a meaningless "₹0.02 Cr".
+    countRowMatchers: [/loan\s*disbursals$/i],
+    kpi: {
+      totalMatch: /^loan\s*disbursals$/i,
+      totalLabel: "Total Disbursals (loans)",
+      shareRows: [
+        { label: "Schools", match: /schools\s*loan\s*disbursals/i },
+        { label: "Colleges", match: /higher\s*education\s*loan\s*disbursals/i },
+        { label: "Edtech Platforms", match: /edtech\s*platforms?\s*loan\s*disbursals/i },
+      ],
+    },
+    layout: "grayquest",
+  },
+};
+
+function detectCompanyConfig(kpiKeys) {
+  let best = null, bestScore = 0;
+  Object.values(COMPANY_CONFIGS).forEach(cfg => {
+    const score = cfg.signals.reduce((s, re) => s + (kpiKeys.some(k => re.test(k)) ? 1 : 0), 0);
+    if (score > bestScore) { bestScore = score; best = cfg; }
+  });
+  // Require at least 2 distinct signal hits before committing to a company-specific
+  // template — a single coincidental match (e.g. a generic "Revenue" row) shouldn't
+  // be enough to mis-identify an unrelated company's sheet.
+  return bestScore >= 2 ? best : COMPANY_CONFIGS.easyrewardz;
+}
+
 function buildFYGroups(months) {
   const order = [];
   const byEndYear = {};
@@ -306,28 +395,52 @@ const PRIORITY_ORDER = [
   "Total Revenue", "Direct Expenses", "Gross Profit", "Indirect Expenses", "EBITDA", "Net Profit",
 ];
 
-function buildDataset(parsed, companyInfo) {
+function buildDataset(parsed, companyInfo, companyConfig = COMPANY_CONFIGS.easyrewardz) {
   const { months, kpis, headcount } = parsed;
   const fyGroups = buildFYGroups(months);
   const qGroups = buildQuarterGroups(months);
+  const revenueBaseKey = companyConfig.revenueBaseKey || "Total Revenue";
+  const revenueLabel = companyConfig.revenueLabel || "Revenue";
+  const priorityOrder = companyConfig.priorityOrder || PRIORITY_ORDER;
   const kpiKeys = Object.keys(kpis).sort((a, b) => {
-    const ia = PRIORITY_ORDER.indexOf(a), ib = PRIORITY_ORDER.indexOf(b);
+    const ia = priorityOrder.indexOf(a), ib = priorityOrder.indexOf(b);
     if (ia === -1 && ib === -1) return a.localeCompare(b);
     if (ia === -1) return 1;
     if (ib === -1) return -1;
     return ia - ib;
   });
 
-  const hasRevenue = kpiKeys.includes("Total Revenue");
+  const hasRevenue = kpiKeys.includes(revenueBaseKey);
   const hasGP = kpiKeys.includes("Gross Profit");
   const hasEBITDA = kpiKeys.includes("EBITDA");
   const hasNet = kpiKeys.includes("Net Profit");
+
+  // Rate/ratio rows (take rate, IRR, cost of funds, ...) must never be summed
+  // across a quarter/year like a flow amount would be — three months of a ~20%
+  // rate summed reads as ~60%, which is meaningless. These are averaged across
+  // the period's non-null months instead (a plain average, not volume-weighted —
+  // noted wherever it's surfaced). Only companies that actually have such rows
+  // define rateRowMatchers; Easyrewardz's config leaves it empty, so this is a
+  // no-op there.
+  const rateMatchers = companyConfig.rateRowMatchers || [];
+  const rateKeys = new Set(kpiKeys.filter(k => rateMatchers.some(re => re.test(k))));
+  // Count rows (e.g. "Loan Disbursals") are a unit count, not a currency
+  // amount — format as a plain number on Key Metrics cards instead of ₹ Cr,
+  // which would otherwise divide a count like 170,646 by 1e7 and show a
+  // meaningless "₹0.02 Cr".
+  const countMatchers = companyConfig.countRowMatchers || [];
+  const countKeys = new Set(kpiKeys.filter(k => countMatchers.some(re => re.test(k))));
 
   function sumFor(key, idxs) {
     const arr = kpis[key];
     let sum = 0, has = false;
     idxs.forEach(i => { const v = arr[i]; if (typeof v === "number") { sum += v; has = true; } });
     return has ? sum : null;
+  }
+  function avgFor(key, idxs) {
+    const arr = kpis[key];
+    const vals = idxs.map(i => arr[i]).filter(v => typeof v === "number");
+    return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
   }
   function avgHC(idxs) {
     if (!headcount) return null;
@@ -336,12 +449,18 @@ function buildDataset(parsed, companyInfo) {
   }
   function computeRow(groupMeta, idxs) {
     const row = { ...groupMeta };
-    kpiKeys.forEach(k => { row[k] = sumFor(k, idxs); });
+    kpiKeys.forEach(k => { row[k] = rateKeys.has(k) ? avgFor(k, idxs) : sumFor(k, idxs); });
     row["Headcount"] = avgHC(idxs);
-    if (hasRevenue && hasGP) row["Gross Margin"] = row["Total Revenue"] ? row["Gross Profit"] / row["Total Revenue"] : null;
-    if (hasRevenue && hasEBITDA) row["EBITDA Margin"] = row["Total Revenue"] ? row["EBITDA"] / row["Total Revenue"] : null;
-    if (hasRevenue && hasNet) row["Net Margin"] = row["Total Revenue"] ? row["Net Profit"] / row["Total Revenue"] : null;
-    if (hasRevenue && headcount) row["Rev per Employee"] = row["Headcount"] ? row["Total Revenue"] / row["Headcount"] : null;
+    // Guard every division on typeof === "number" for BOTH sides, not just
+    // truthiness — `null / x` silently evaluates to 0 in JS, which would
+    // otherwise render a misleading "0.0%" for a genuinely missing numerator
+    // (e.g. a "Net Profit" row that exists but has no data yet) instead of N/A.
+    const base = row[revenueBaseKey];
+    const baseOk = typeof base === "number" && base !== 0;
+    row["Gross Margin"] = (hasRevenue && hasGP && baseOk && typeof row["Gross Profit"] === "number") ? row["Gross Profit"] / base : null;
+    row["EBITDA Margin"] = (hasRevenue && hasEBITDA && baseOk && typeof row["EBITDA"] === "number") ? row["EBITDA"] / base : null;
+    row["Net Margin"] = (hasRevenue && hasNet && baseOk && typeof row["Net Profit"] === "number") ? row["Net Profit"] / base : null;
+    row["Rev per Employee"] = (hasRevenue && headcount && baseOk && typeof row["Headcount"] === "number" && row["Headcount"] !== 0) ? base / row["Headcount"] : null;
     return row;
   }
 
@@ -349,14 +468,21 @@ function buildDataset(parsed, companyInfo) {
   const qData = qGroups.map(q => computeRow(q, q.idxs));
 
   const cardConfigs = [];
-  kpiKeys.forEach(k => cardConfigs.push({ key: k, label: k, fmt: fmtCr, good: "up", primary: k === "Total Revenue" || k === "EBITDA" || k === "Net Profit" }));
+  kpiKeys.forEach(k => cardConfigs.push({
+    key: k, label: k, fmt: rateKeys.has(k) ? fmtPct : countKeys.has(k) ? fmtNum : fmtCr, good: "up",
+    primary: k === revenueBaseKey || k === "EBITDA" || k === "Net Profit",
+  }));
   if (hasRevenue && hasGP) cardConfigs.push({ key: "Gross Margin", label: "Gross Margin", fmt: fmtPct, good: "up", isMargin: true, marginOf: "Gross Profit" });
   if (hasRevenue && hasEBITDA) cardConfigs.push({ key: "EBITDA Margin", label: "EBITDA Margin", fmt: fmtPct, good: "up", isMargin: true, marginOf: "EBITDA" });
   if (hasRevenue && hasNet) cardConfigs.push({ key: "Net Margin", label: "Net Margin", fmt: fmtPct, good: "up", isMargin: true, marginOf: "Net Profit" });
   if (headcount) cardConfigs.push({ key: "Headcount", label: "Headcount (avg)", fmt: fmtNum, good: "neutral", isHeadcount: true });
   if (hasRevenue && headcount) cardConfigs.push({ key: "Rev per Employee", label: "Revenue per Employee", fmt: fmtCr, good: "up", isRevPerEmp: true });
 
-  return { months, kpis, headcount, kpiKeys, fyGroups, fyData, qGroups, qData, cardConfigs, hasRevenue, hasGP, hasEBITDA, hasNet, companyInfo };
+  return {
+    months, kpis, headcount, kpiKeys, fyGroups, fyData, qGroups, qData, cardConfigs, hasRevenue, hasGP, hasEBITDA, hasNet, companyInfo,
+    companyId: companyConfig.id, companyConfig, revenueBaseKey, revenueLabel, pnlRevenueSubLines: companyConfig.pnlRevenueSubLines || null,
+    rateKeys,
+  };
 }
 
 function fmtCr(v) {
@@ -493,7 +619,7 @@ function MiniSpark({ data, dataKey, color }) {
 function monthlySeriesFor(ds, cfg, fyIdxs) {
   return fyIdxs.map(i => {
     let value = null;
-    const rev = ds.kpis["Total Revenue"]?.[i];
+    const rev = ds.kpis[ds.revenueBaseKey]?.[i];
     if (cfg.isHeadcount) value = ds.headcount?.[i] ?? null;
     else if (cfg.isRevPerEmp) value = ds.headcount?.[i] ? rev / ds.headcount[i] : null;
     else if (cfg.isMargin) value = rev ? (ds.kpis[cfg.marginOf]?.[i] ?? null) / rev : null;
@@ -594,7 +720,7 @@ function DrillDownModal({ cfg, ds, fyIndex, onClose }) {
 
 function RevenueTrendChart({ ds }) {
   if (!ds.hasRevenue) return null;
-  const data = ds.months.map((mo, i) => ({ month: mo.label, revenue: ds.kpis["Total Revenue"][i] }));
+  const data = ds.months.map((mo, i) => ({ month: mo.label, revenue: ds.kpis[ds.revenueBaseKey][i] }));
   return (
     <ResponsiveContainer width="100%" height={230}>
       <LineChart data={data} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
@@ -609,8 +735,10 @@ function RevenueTrendChart({ ds }) {
 }
 
 function RevenueMixChart({ ds }) {
-  const revenueLines = ds.kpiKeys.filter(k => /revenue/i.test(k) && k !== "Total Revenue");
-  if (!revenueLines.length) return <div className="chart-empty">No revenue sub-lines to break down — only "Total Revenue" is present.</div>;
+  const revenueLines = ds.pnlRevenueSubLines
+    ? ds.kpiKeys.filter(k => ds.pnlRevenueSubLines.some(re => re.test(k)))
+    : ds.kpiKeys.filter(k => /revenue/i.test(k) && k !== ds.revenueBaseKey);
+  if (!revenueLines.length) return <div className="chart-empty">No revenue sub-lines to break down — only "{ds.revenueLabel}" is present.</div>;
   const colors = ["#1D4E4A", "#B08A3E", "#7C9885", "#8B95F2", "#B3492F"];
   const data = ds.fyData.map(f => {
     const row = { fy: f.label };
@@ -633,7 +761,7 @@ function RevenueMixChart({ ds }) {
 
 function ProfitabilityChart({ ds }) {
   if (!ds.hasRevenue) return null;
-  const data = ds.fyData.map(f => ({ fy: f.label, Revenue: f["Total Revenue"], EBITDA: f["EBITDA"], "Net Profit": f["Net Profit"] }));
+  const data = ds.fyData.map(f => ({ fy: f.label, Revenue: f[ds.revenueBaseKey], EBITDA: f["EBITDA"], "Net Profit": f["Net Profit"] }));
   return (
     <ResponsiveContainer width="100%" height={230}>
       <ComposedChart data={data} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
@@ -707,7 +835,7 @@ function QuarterlyRevenueChart({ ds }) {
   const latestKey = quarters[quarters.length - 1].key;
   const data = quarters.map(q => ({
     period: q.label.replace(" (partial)", ""),
-    value: q["Total Revenue"],
+    value: q[ds.revenueBaseKey],
     isLatest: q.key === latestKey,
   }));
   return (
@@ -758,8 +886,8 @@ function EbitdaTurnaroundChart({ ds }) {
 
 function RevenueForecastChart({ ds }) {
   if (!ds.hasRevenue) return null;
-  const forecast = buildQuarterlyForecast(ds.qData, "Total Revenue", 2);
-  if (!forecast) return <div className="chart-empty">Need at least 4 complete quarters of Total Revenue to project a trend.</div>;
+  const forecast = buildQuarterlyForecast(ds.qData, ds.revenueBaseKey, 2);
+  if (!forecast) return <div className="chart-empty">Need at least 4 complete quarters of {ds.revenueLabel} to project a trend.</div>;
   return (
     <>
       <ResponsiveContainer width="100%" height={190}>
@@ -879,7 +1007,7 @@ function KeyPerformanceIndicatorsTable({ ds }) {
   const periods = periodsFor(ds, mode);
   const quarterly = mode === "quarterly";
 
-  const revenueLines = ds.kpiKeys.filter(k => k !== "Total Revenue" && /revenue/i.test(k));
+  const revenueLines = ds.kpiKeys.filter(k => k !== ds.revenueBaseKey && /revenue/i.test(k));
   const claimed = new Set();
   const rows = KPI_SEMANTIC_RULES.map(rule => {
     const matchedKeys = revenueLines.filter(k => !claimed.has(k) && rule.match.test(k));
@@ -922,7 +1050,7 @@ function KeyPerformanceIndicatorsTable({ ds }) {
                 {periods.map(p => {
                   if (!row.matchedKeys.length) return <td key={p.key} className="fin-table__na">N/A</td>;
                   const raw = valueFor(p, row.matchedKeys);
-                  const total = p["Total Revenue"];
+                  const total = p[ds.revenueBaseKey];
                   const pct = (typeof raw === "number" && typeof total === "number" && total !== 0) ? raw / total : null;
                   return <td key={p.key}>{fmtPct(pct)}</td>;
                 })}
@@ -943,15 +1071,100 @@ function KeyPerformanceIndicatorsTable({ ds }) {
   );
 }
 
-function RevenueProfitabilityTable({ ds }) {
+/* ============================================================
+   GRAYQUEST KEY PERFORMANCE INDICATORS — structurally different
+   from Easyrewardz's KPI table: one absolute row ("Total
+   Disbursals", a loan count) plus three revenue-mix-style share
+   rows (Schools / Colleges / Edtech Platforms, each a % of Total
+   Disbursals). Row matching uses the semantic rules from
+   COMPANY_CONFIGS.grayquest.kpi — e.g. "Colleges" resolves to
+   whatever row matches "Higher Education Loan Disbursals" rather
+   than requiring a row literally named "Colleges" — so a future
+   GrayQuest export with slightly different row names still works,
+   and if a concept genuinely has no match, it renders N/A instead
+   of guessing.
+   ============================================================ */
+function GrayQuestKPITable({ ds }) {
+  const [mode, setMode] = useState("quarterly");
+  const cfg = ds.companyConfig.kpi;
+  if (!cfg) return null;
+  const periods = periodsFor(ds, mode);
+  const quarterly = mode === "quarterly";
+
+  const totalKey = ds.kpiKeys.find(k => cfg.totalMatch.test(k)) || null;
+  const shareRows = cfg.shareRows.map(r => ({ ...r, matchedKey: ds.kpiKeys.find(k => r.match.test(k)) || null }));
+  const unmatched = shareRows.filter(r => !r.matchedKey);
+
+  return (
+    <section className="section">
+      <div className="fin-section__head">
+        <div className="section__title">Key Performance Indicators</div>
+        <PeriodToggle mode={mode} onChange={setMode} />
+      </div>
+      <div className="fin-table-wrap fin-table-wrap--kpi">
+        <table className="fin-table fin-table--kpi">
+          <thead>
+            <tr>
+              <th className="fin-table__label-col">KPI</th>
+              {periods.map(p => (
+                <th key={p.key}>
+                  {p.label.replace(" (partial)", "")}
+                  {quarterly
+                    ? (!p.complete ? <span className="fin-table__partial"> (partial)</span> : "")
+                    : (p.partial ? <span className="fin-table__partial"> (partial)</span> : "")}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td className="fin-table__label-col">{cfg.totalLabel}</td>
+              {periods.map(p => (
+                <td key={p.key}>{totalKey ? fmtNum(p[totalKey]) : <span className="fin-table__na">N/A</span>}</td>
+              ))}
+            </tr>
+            {shareRows.map(row => (
+              <tr key={row.label}>
+                <td className="fin-table__label-col">{row.label}</td>
+                {periods.map(p => {
+                  if (!row.matchedKey || !totalKey) return <td key={p.key} className="fin-table__na">N/A</td>;
+                  const raw = p[row.matchedKey];
+                  const total = p[totalKey];
+                  const pct = (typeof raw === "number" && typeof total === "number" && total !== 0) ? raw / total : null;
+                  return <td key={p.key}>{fmtPct(pct)}</td>;
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {!totalKey && (
+        <div className="fin-table__foot-note">
+          <Info size={12} style={{ flexShrink: 0, position: "relative", top: 1 }} />
+          No row matching "Loan Disbursals" (the total-disbursal concept) was found in this workbook — every row above
+          shows N/A rather than a guessed figure.
+        </div>
+      )}
+      {totalKey && unmatched.length > 0 && (
+        <div className="fin-table__foot-note">
+          <Info size={12} style={{ flexShrink: 0, position: "relative", top: 1 }} />
+          {unmatched.map(r => r.label).join(" and ")} {unmatched.length > 1 ? "have" : "has"} no matching disbursal line
+          in this workbook — shown as N/A rather than guessed.
+        </div>
+      )}
+    </section>
+  );
+}
+
+function RevenueProfitabilityTable({ ds, title = "Revenue & Profitability" }) {
   const [mode, setMode] = useState("quarterly");
   if (!ds.hasRevenue) return null;
   const periods = periodsFor(ds, mode);
   const quarterly = mode === "quarterly";
 
   const rows = [
-    { label: "Revenue", key: "Total Revenue", type: "currency" },
-    { label: "Revenue Growth", key: "Total Revenue", type: "growth" },
+    { label: ds.revenueLabel || "Revenue", key: ds.revenueBaseKey, type: "currency" },
+    { label: `${ds.revenueLabel || "Revenue"} Growth`, key: ds.revenueBaseKey, type: "growth" },
     ds.hasGP && { label: "Gross Profit", key: "Gross Profit", type: "currency" },
     ds.hasGP && { label: "Gross Margin", key: "Gross Margin", type: "percent" },
     ds.hasEBITDA && { label: "EBITDA", key: "EBITDA", type: "currency" },
@@ -976,8 +1189,8 @@ function RevenueProfitabilityTable({ ds }) {
       }),
     ])];
     exportAoaToExcel(
-      buildExportFilename(ds, `Revenue_Profitability_${quarterly ? "Quarterly" : "Yearly"}`),
-      "Revenue & Profitability",
+      buildExportFilename(ds, `${title.replace(/[^a-z0-9]+/gi, "_")}_${quarterly ? "Quarterly" : "Yearly"}`),
+      title.slice(0, 31),
       aoa
     );
   };
@@ -985,7 +1198,7 @@ function RevenueProfitabilityTable({ ds }) {
   return (
     <section className="section">
       <div className="fin-section__head">
-        <div className="section__title">Revenue &amp; Profitability</div>
+        <div className="section__title">{title}</div>
         <div className="fin-section__controls">
           <PeriodToggle mode={mode} onChange={setMode} />
           <ExportButton onClick={handleExport} />
@@ -1025,16 +1238,18 @@ function ProfitAndLossTable({ ds }) {
   const periods = periodsFor(ds, mode);
   const quarterly = mode === "quarterly";
 
-  const revenueLines = ds.kpiKeys.filter(k => /revenue/i.test(k) && k !== "Total Revenue");
+  const revenueLines = ds.pnlRevenueSubLines
+    ? ds.kpiKeys.filter(k => ds.pnlRevenueSubLines.some(re => re.test(k)))
+    : ds.kpiKeys.filter(k => /revenue/i.test(k) && k !== ds.revenueBaseKey);
   const hasDirect = ds.kpiKeys.includes("Direct Expenses");
   const hasIndirect = ds.kpiKeys.includes("Indirect Expenses");
 
   const sections = [
     {
-      heading: "Revenue",
+      heading: ds.revenueLabel || "Revenue",
       rows: [
         ...revenueLines.map(k => ({ label: k, key: k, type: "currency" })),
-        { label: "Total Revenue", key: "Total Revenue", type: "currency", subtotal: true },
+        { label: ds.revenueLabel || "Total Revenue", key: ds.revenueBaseKey, type: "currency", subtotal: true },
       ],
     },
     ds.hasGP && {
@@ -1555,8 +1770,9 @@ function ExecutiveSummary({ ds }) {
   const { latestQ, prevYearQ, latestFY, prevFY } = getExecStats(ds);
   const companyInfo = ds.companyInfo;
 
-  const revYoY = latestQ && prevYearQ && ds.hasRevenue && prevYearQ["Total Revenue"]
-    ? ((latestQ["Total Revenue"] - prevYearQ["Total Revenue"]) / Math.abs(prevYearQ["Total Revenue"])) * 100
+  const revKey = ds.revenueBaseKey;
+  const revYoY = latestQ && prevYearQ && ds.hasRevenue && prevYearQ[revKey]
+    ? ((latestQ[revKey] - prevYearQ[revKey]) / Math.abs(prevYearQ[revKey])) * 100
     : null;
 
   const ebitdaDelta = latestFY && prevFY && ds.hasEBITDA && typeof latestFY["EBITDA"] === "number" && typeof prevFY["EBITDA"] === "number"
@@ -1580,9 +1796,9 @@ function ExecutiveSummary({ ds }) {
             <div className="narrative-bullet">
               <span className="narrative-bullet__icon"><TrendingUp size={15} /></span>
               <span>
-                {latestQ && prevYearQ && ds.hasRevenue && prevYearQ["Total Revenue"] ? (
-                  <><strong>{latestQ.label}</strong> closed with net revenue of <strong>{fmtCr(latestQ["Total Revenue"])}</strong>,{" "}
-                  {revYoY >= 0 ? "up" : "down"} {Math.abs(revYoY).toFixed(1)}% versus {fmtCr(prevYearQ["Total Revenue"])} in{" "}
+                {latestQ && prevYearQ && ds.hasRevenue && prevYearQ[revKey] ? (
+                  <><strong>{latestQ.label}</strong> closed with {(ds.revenueLabel || "net revenue").toLowerCase()} of <strong>{fmtCr(latestQ[revKey])}</strong>,{" "}
+                  {revYoY >= 0 ? "up" : "down"} {Math.abs(revYoY).toFixed(1)}% versus {fmtCr(prevYearQ[revKey])} in{" "}
                   {prevYearQ.label}.</>
                 ) : (
                   <>Revenue data isn't complete enough yet to compute a like-for-like quarterly YoY comparison — add more
@@ -1612,7 +1828,7 @@ function ExecutiveSummary({ ds }) {
                   <>{marginPick[0]} for {latestFY.label} stood at <strong>{fmtPct(marginCurr)}</strong>
                   {typeof marginPrev === "number" ? <>, versus {fmtPct(marginPrev)} the prior FY</> : ""}.</>
                 ) : (
-                  <>Add Total Revenue plus Gross Profit, EBITDA, or Net Profit to the sheet to unlock a margin-trend read-out here.</>
+                  <>Add {ds.revenueLabel || "Total Revenue"} plus Gross Profit, EBITDA, or Net Profit to the sheet to unlock a margin-trend read-out here.</>
                 )}
               </span>
             </div>
@@ -1622,9 +1838,9 @@ function ExecutiveSummary({ ds }) {
         <div className="narrative-stat-col">
           <div className="stat-tile">
             <div className="stat-tile__label">Latest quarter vs prior year</div>
-            <div className="stat-tile__value">{latestQ ? fmtCr(latestQ["Total Revenue"]) : "N/A"}</div>
+            <div className="stat-tile__value">{latestQ ? fmtCr(latestQ[revKey]) : "N/A"}</div>
             <div className="stat-tile__sub">
-              {latestQ ? latestQ.label : "—"} revenue {revYoY !== null && <Delta curr={latestQ?.["Total Revenue"]} prev={prevYearQ?.["Total Revenue"]} good="up" />}
+              {latestQ ? latestQ.label : "—"} {(ds.revenueLabel || "revenue").toLowerCase()} {revYoY !== null && <Delta curr={latestQ?.[revKey]} prev={prevYearQ?.[revKey]} good="up" />}
             </div>
           </div>
           <div className="stat-tile">
@@ -1649,6 +1865,157 @@ function ExecutiveSummary({ ds }) {
           </div>
         </div>
       </div>
+    </section>
+  );
+}
+
+/* ============================================================
+   GRAYQUEST PERFORMANCE COMMENTARY — plays the same role as
+   ExecutiveSummary but with GrayQuest-specific insights (disbursal
+   growth, Schools/Colleges/Edtech mix, take rate, cost of funds)
+   layered in per the spec. Every sentence below either renders a
+   number computed straight from ds.fyData/ds.qData, or renders a
+   plain "not enough data yet" fallback — never a qualitative claim
+   without a number behind it.
+   ============================================================ */
+function describeEbitdaTrend(curr, prev) {
+  if (typeof curr !== "number" || typeof prev !== "number") return null;
+  if (prev < 0 && curr < 0) return curr > prev ? "loss narrowed" : curr < prev ? "loss widened" : "loss held steady";
+  if (prev < 0 && curr >= 0) return "turned positive";
+  if (prev >= 0 && curr < 0) return "turned negative";
+  return curr > prev ? "grew" : curr < prev ? "declined" : "held steady";
+}
+
+function GrayQuestCommentary({ ds }) {
+  const { latestQ, prevYearQ, latestFY, prevFY } = getExecStats(ds);
+  const revKey = ds.revenueBaseKey;
+  const kpiCfg = ds.companyConfig.kpi;
+  const totalDisbKey = kpiCfg ? ds.kpiKeys.find(k => kpiCfg.totalMatch.test(k)) : null;
+
+  const revYoY = latestQ && prevYearQ && typeof latestQ[revKey] === "number" && typeof prevYearQ[revKey] === "number" && prevYearQ[revKey]
+    ? ((latestQ[revKey] - prevYearQ[revKey]) / Math.abs(prevYearQ[revKey])) * 100 : null;
+
+  const disbYoY = totalDisbKey && latestFY && prevFY && typeof latestFY[totalDisbKey] === "number" && typeof prevFY[totalDisbKey] === "number" && prevFY[totalDisbKey]
+    ? ((latestFY[totalDisbKey] - prevFY[totalDisbKey]) / Math.abs(prevFY[totalDisbKey])) * 100 : null;
+
+  const ebitdaCurr = latestFY && typeof latestFY["EBITDA"] === "number" ? latestFY["EBITDA"] : null;
+  const ebitdaPrev = prevFY && typeof prevFY["EBITDA"] === "number" ? prevFY["EBITDA"] : null;
+  const ebitdaTrend = describeEbitdaTrend(ebitdaCurr, ebitdaPrev);
+
+  const marginPick = bestMarginKey(ds);
+  const marginFYIdx = latestFY ? ds.fyData.findIndex(f => f.key === latestFY.key) : -1;
+  const marginPrevFY = marginFYIdx > 0 ? ds.fyData[marginFYIdx - 1] : null;
+  const marginCurr = marginPick && latestFY ? latestFY[marginPick[0]] : null;
+  const marginPrev = marginPick && marginPrevFY ? marginPrevFY[marginPick[0]] : null;
+
+  function shareFor(fy, matchedKey) {
+    if (!fy || !matchedKey || !totalDisbKey) return null;
+    const num = fy[matchedKey], den = fy[totalDisbKey];
+    return (typeof num === "number" && typeof den === "number" && den !== 0) ? (num / den) * 100 : null;
+  }
+  const shareRows = (kpiCfg?.shareRows || []).map(r => ({ label: r.label, matchedKey: ds.kpiKeys.find(k => r.match.test(k)) || null }));
+  const shares = shareRows
+    .map(r => ({ label: r.label, curr: shareFor(latestFY, r.matchedKey), prev: shareFor(prevFY, r.matchedKey) }))
+    .filter(s => s.curr !== null);
+
+  const takeRateKey = ds.kpiKeys.find(k => /take\s*rate/i.test(k)) || null;
+  const takeRateCurr = takeRateKey && latestFY && typeof latestFY[takeRateKey] === "number" ? latestFY[takeRateKey] : null;
+  const takeRatePrev = takeRateKey && prevFY && typeof prevFY[takeRateKey] === "number" ? prevFY[takeRateKey] : null;
+
+  const cofKey = ds.kpiKeys.find(k => /cost\s*of\s*funds?/i.test(k)) || null;
+  const cofCurr = cofKey && latestFY && typeof latestFY[cofKey] === "number" ? latestFY[cofKey] : null;
+  const cofPrev = cofKey && prevFY && typeof prevFY[cofKey] === "number" ? prevFY[cofKey] : null;
+
+  return (
+    <section className="section narrative-section">
+      <div className="section__title">Performance Commentary</div>
+      <div className="narrative-grid">
+        <div className="narrative-card">
+          <div className="narrative-card__eyebrow">Growth &amp; mix</div>
+          <div className="narrative-bullets">
+            <div className="narrative-bullet">
+              <span className="narrative-bullet__icon"><TrendingUp size={15} /></span>
+              <span>
+                {totalDisbKey && latestFY && prevFY && disbYoY !== null ? (
+                  <>Disbursals {disbYoY >= 0 ? "increased" : "decreased"} <strong>{Math.abs(disbYoY).toFixed(1)}%</strong> YoY to{" "}
+                  <strong>{fmtNum(latestFY[totalDisbKey])}</strong> loans in {latestFY.label}, from {fmtNum(prevFY[totalDisbKey])} in {prevFY.label}.</>
+                ) : (
+                  <>Not enough complete fiscal years of disbursal data yet to compute YoY disbursal growth.</>
+                )}
+              </span>
+            </div>
+            <div className="narrative-bullet">
+              <span className="narrative-bullet__icon"><Rocket size={15} /></span>
+              <span>
+                {latestQ && prevYearQ && revYoY !== null ? (
+                  <><strong>{latestQ.label}</strong> closed with {(ds.revenueLabel || "net revenue").toLowerCase()} of{" "}
+                  <strong>{fmtCr(latestQ[revKey])}</strong>, {revYoY >= 0 ? "up" : "down"} {Math.abs(revYoY).toFixed(1)}% versus{" "}
+                  {fmtCr(prevYearQ[revKey])} in {prevYearQ.label}.</>
+                ) : (
+                  <>{ds.revenueLabel || "Revenue"} data isn't complete enough yet to compute a like-for-like quarterly YoY comparison.</>
+                )}
+              </span>
+            </div>
+            <div className="narrative-bullet">
+              <span className="narrative-bullet__icon"><Users size={15} /></span>
+              <span>
+                {shares.length ? (
+                  <>
+                    {shares.map((s, i) => (
+                      <React.Fragment key={s.label}>
+                        {i > 0 ? "; " : ""}
+                        <strong>{s.label}</strong> accounted for <strong>{s.curr.toFixed(1)}%</strong> of total disbursals in {latestFY.label}
+                        {typeof s.prev === "number" ? <>, versus {s.prev.toFixed(1)}% in {prevFY.label}</> : ""}
+                      </React.Fragment>
+                    ))}.
+                  </>
+                ) : (
+                  <>Segment-level disbursal mix (Schools / Colleges / Edtech Platforms) isn't available yet for this period.</>
+                )}
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <div className="narrative-stat-col">
+          <div className="stat-tile">
+            <div className="stat-tile__label">Latest quarter vs prior year</div>
+            <div className="stat-tile__value">{latestQ ? fmtCr(latestQ[revKey]) : "N/A"}</div>
+            <div className="stat-tile__sub">
+              {latestQ ? latestQ.label : "—"} {(ds.revenueLabel || "revenue").toLowerCase()} {revYoY !== null && <Delta curr={latestQ?.[revKey]} prev={prevYearQ?.[revKey]} good="up" />}
+            </div>
+          </div>
+          <div className="stat-tile">
+            <div className="stat-tile__label">FY EBITDA</div>
+            <div className="stat-tile__value">{latestFY ? fmtCr(latestFY["EBITDA"]) : "N/A"}</div>
+            <div className="stat-tile__sub">
+              {latestFY ? `${latestFY.label}${ebitdaTrend ? `, ${ebitdaTrend} from ${fmtCr(ebitdaPrev)} prior FY` : ""}` : "—"}
+            </div>
+          </div>
+          <div className="stat-tile">
+            <div className="stat-tile__label">{marginPick ? marginPick[0] : "FY Margin"}</div>
+            <div className="stat-tile__value">{marginPick && typeof marginCurr === "number" ? fmtPct(marginCurr) : "N/A"}</div>
+            <div className="stat-tile__sub">{latestFY ? `${latestFY.label}${typeof marginPrev === "number" ? `, vs ${fmtPct(marginPrev)} prior FY` : ""}` : "—"}</div>
+          </div>
+        </div>
+      </div>
+
+      {(takeRateKey || cofKey) && (typeof takeRateCurr === "number" || typeof cofCurr === "number") && (
+        <div className="narrative-extra-note">
+          <Info size={12} style={{ flexShrink: 0, position: "relative", top: 1 }} />
+          <span>
+            {typeof takeRateCurr === "number" && (
+              <>Take rate averaged <strong>{fmtPct(takeRateCurr)}</strong> in {latestFY?.label}
+              {typeof takeRatePrev === "number" ? <>, versus {fmtPct(takeRatePrev)} the prior FY</> : ""}. </>
+            )}
+            {typeof cofCurr === "number" && (
+              <>Cost of funds averaged <strong>{fmtPct(cofCurr)}</strong> in {latestFY?.label}
+              {typeof cofPrev === "number" ? <>, versus {fmtPct(cofPrev)} the prior FY</> : ""}. </>
+            )}
+            <span style={{ opacity: 0.75 }}>(period figures are a simple average of the monthly rate, not volume-weighted)</span>
+          </span>
+        </div>
+      )}
     </section>
   );
 }
@@ -1753,7 +2120,17 @@ export default function App() {
       const buf = await file.arrayBuffer();
       const wb = XLSX.read(buf, { type: "array", cellDates: true });
       const parsed = parseWorkbook(wb);
-      const companyInfo = parseCompanyInfo(wb);
+      // Identify which company's template this is from the row names actually
+      // present — never from the filename — so the right KPI/financial/commentary
+      // mappings apply. An unrecognized sheet falls back to the original
+      // (Easyrewardz-shaped) generic behaviour, unchanged from before GrayQuest.
+      const companyConfig = detectCompanyConfig(Object.keys(parsed.kpis));
+      const sheetCompanyInfo = parseCompanyInfo(wb);
+      // If the workbook has no Company Info sheet, fall back to this company's
+      // static profile text (if one is configured) rather than leaving the
+      // Business Description section blank — this is user-supplied profile copy,
+      // never derived from or mixed with the financial figures.
+      const companyInfo = sheetCompanyInfo || companyConfig.defaultDescription || null;
       // News Feed / Industry Data are a separate, independent pipeline from the
       // financial Monthly Data parse above — a missing or malformed sheet here
       // must never affect Performance section parsing.
@@ -1761,14 +2138,14 @@ export default function App() {
       try { newsFeed = parseNewsSheet(wb); } catch { newsFeed = null; }
       try { industryData = parseIndustrySheet(wb); } catch { industryData = null; }
       try { refreshMeta = parseRefreshMeta(wb); } catch { refreshMeta = null; }
-      const ds = buildDataset(parsed, companyInfo);
+      const ds = buildDataset(parsed, companyInfo, companyConfig);
       ds.newsFeed = newsFeed;
       ds.industryData = industryData;
       ds.refreshMeta = refreshMeta;
       setDataset(ds);
       setFyIndex(ds.fyData.length - 1);
       setFileName(file.name);
-      setStatus({ type: "success", text: `Loaded ${ds.months.length} months, ${ds.kpiKeys.length} KPIs, ${ds.fyData.length} FY periods from "${parsed.sheetName}".` });
+      setStatus({ type: "success", text: `Loaded ${ds.months.length} months, ${ds.kpiKeys.length} KPIs, ${ds.fyData.length} FY periods from "${parsed.sheetName}" (${companyConfig.displayName || companyInfo?.companyName || "company"} template).` });
     } catch (err) {
       setStatus({ type: "error", text: String(err.message || err) });
     }
@@ -1830,11 +2207,19 @@ export default function App() {
         <>
           <BusinessDescription companyInfo={dataset.companyInfo} />
 
-          <RevenueProfitabilityTable ds={dataset} />
-
-          <ExecutiveSummary ds={dataset} />
-
-          <KeyPerformanceIndicatorsTable ds={dataset} />
+          {dataset.companyId === "grayquest" ? (
+            <>
+              <GrayQuestKPITable ds={dataset} />
+              <RevenueProfitabilityTable ds={dataset} title="Key Financial Highlights" />
+              <GrayQuestCommentary ds={dataset} />
+            </>
+          ) : (
+            <>
+              <RevenueProfitabilityTable ds={dataset} />
+              <ExecutiveSummary ds={dataset} />
+              <KeyPerformanceIndicatorsTable ds={dataset} />
+            </>
+          )}
 
           <section className="section">
             <div className="fin-section__head">
@@ -1887,26 +2272,28 @@ export default function App() {
             </div>
           </section>
 
-          <section className="section">
-            <div className="section__title">Outlook &amp; Forecast <span className="section__sub">— quarterly, trend-projected</span></div>
-            <div className="chart-grid">
-              <div className="chart-card">
-                <div className="chart-card__title">Quarterly Revenue — YoY</div>
-                <div className="chart-card__note">Last 8 quarters; latest quarter highlighted in gold</div>
-                <QuarterlyRevenueChart ds={dataset} />
+          {dataset.companyId !== "grayquest" && (
+            <section className="section">
+              <div className="section__title">Outlook &amp; Forecast <span className="section__sub">— quarterly, trend-projected</span></div>
+              <div className="chart-grid">
+                <div className="chart-card">
+                  <div className="chart-card__title">Quarterly Revenue — YoY</div>
+                  <div className="chart-card__note">Last 8 quarters; latest quarter highlighted in gold</div>
+                  <QuarterlyRevenueChart ds={dataset} />
+                </div>
+                <div className="chart-card">
+                  <div className="chart-card__title">EBITDA Turnaround &amp; Forecast</div>
+                  <div className="chart-card__note">Green = positive, red = negative, dashed = projected</div>
+                  <EbitdaTurnaroundChart ds={dataset} />
+                </div>
+                <div className="chart-card" style={{ gridColumn: "1 / -1" }}>
+                  <div className="chart-card__title">Revenue Trend &amp; Forecast</div>
+                  <div className="chart-card__note">Linear trend on the last up to 8 complete quarters, projected 2 quarters forward</div>
+                  <RevenueForecastChart ds={dataset} />
+                </div>
               </div>
-              <div className="chart-card">
-                <div className="chart-card__title">EBITDA Turnaround &amp; Forecast</div>
-                <div className="chart-card__note">Green = positive, red = negative, dashed = projected</div>
-                <EbitdaTurnaroundChart ds={dataset} />
-              </div>
-              <div className="chart-card" style={{ gridColumn: "1 / -1" }}>
-                <div className="chart-card__title">Revenue Trend &amp; Forecast</div>
-                <div className="chart-card__note">Linear trend on the last up to 8 complete quarters, projected 2 quarters forward</div>
-                <RevenueForecastChart ds={dataset} />
-              </div>
-            </div>
-          </section>
+            </section>
+          )}
 
           <section className="section">
             <div className="section__title">Cash &amp; Operations</div>
@@ -2000,6 +2387,7 @@ function GlobalStyles() {
       .narrative-bullets { display:flex; flex-direction:column; gap:16px; }
       .narrative-bullet { display:flex; gap:12px; align-items:flex-start; font-size:13.5px; line-height:1.65; color:var(--ink); }
       .narrative-bullet__icon { flex-shrink:0; width:28px; height:28px; border-radius:8px; display:flex; align-items:center; justify-content:center; background:var(--surface); color:var(--brand); margin-top:1px; }
+      .narrative-extra-note { display:flex; align-items:flex-start; gap:6px; margin-top:16px; padding-top:16px; border-top:1px solid var(--border); font-size:12px; color:var(--muted); line-height:1.6; }
       .narrative-stat-col { display:flex; flex-direction:column; gap:14px; }
       .stat-tile { border:1px solid var(--border); border-radius:12px; padding:16px; background:#fff; }
       .stat-tile__label { font-family:'IBM Plex Mono',monospace; font-size:10.5px; text-transform:uppercase; letter-spacing:0.06em; color:var(--muted); margin-bottom:6px; }
