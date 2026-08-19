@@ -806,6 +806,86 @@ function periodsFor(ds, mode) {
   return mode === "quarterly" ? ds.qData : ds.fyData;
 }
 
+/* ============================================================
+   KEY PERFORMANCE INDICATORS — revenue-mix table (business-line
+   revenue as a % of Total Revenue), aggregated per FY/quarter the
+   same way as every other table here (sum-of-period first, then
+   divide — never an average of monthly percentages).
+
+   Row → source-column matching is done by flexible keyword search
+   against whatever KPI labels are actually present in the uploaded
+   sheet ("Do not assume fixed row numbers"). If a company's sheet
+   has no line item matching a row, that row renders N/A for every
+   period rather than guessing which existing line it might mean —
+   the workbooks this dashboard has been tested against split
+   revenue by customer segment (e.g. "Retail/B2B Revenue", "Banking
+   Revenue"), not by "Platform" / "SetUp", so those two rows will
+   show N/A until a sheet actually has a matching line item.
+   ============================================================ */
+const KPI_TABLE_ROWS = [
+  { label: "Platform Revenue", match: /platform/i },
+  { label: "SetUp Revenue", match: /set[\s-]?up/i },
+  { label: "Campaign Management", match: /campaign/i },
+];
+
+function KeyPerformanceIndicatorsTable({ ds }) {
+  const [mode, setMode] = useState("quarterly");
+  if (!ds.hasRevenue) return null;
+  const periods = periodsFor(ds, mode);
+  const quarterly = mode === "quarterly";
+
+  const rows = KPI_TABLE_ROWS.map(r => ({ ...r, matchedKey: ds.kpiKeys.find(k => r.match.test(k)) || null }));
+  const unmatched = rows.filter(r => !r.matchedKey);
+
+  return (
+    <section className="section">
+      <div className="fin-section__head">
+        <div className="section__title">Key Performance Indicators</div>
+        <PeriodToggle mode={mode} onChange={setMode} />
+      </div>
+      <div className="fin-table-wrap fin-table-wrap--kpi">
+        <table className="fin-table fin-table--kpi">
+          <thead>
+            <tr>
+              <th className="fin-table__label-col">KPI</th>
+              {periods.map(p => (
+                <th key={p.key}>
+                  {p.label.replace(" (partial)", "")}
+                  {quarterly
+                    ? (!p.complete ? <span className="fin-table__partial"> (partial)</span> : "")
+                    : (p.partial ? <span className="fin-table__partial"> (partial)</span> : "")}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map(row => (
+              <tr key={row.label}>
+                <td className="fin-table__label-col">{row.label}</td>
+                {periods.map(p => {
+                  if (!row.matchedKey) return <td key={p.key} className="fin-table__na">N/A</td>;
+                  const raw = p[row.matchedKey];
+                  const total = p["Total Revenue"];
+                  const pct = (typeof raw === "number" && typeof total === "number" && total !== 0) ? raw / total : null;
+                  return <td key={p.key}>{fmtPct(pct)}</td>;
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {unmatched.length > 0 && (
+        <div className="fin-table__foot-note">
+          <Info size={12} style={{ flexShrink: 0, position: "relative", top: 1 }} />
+          {unmatched.map(r => r.label).join(" and ")} {unmatched.length > 1 ? "have" : "has"} no matching line item in
+          this workbook's Monthly Data — shown as N/A rather than estimated. Add a row named accordingly (e.g. containing
+          "Platform" or "Setup") to populate it.
+        </div>
+      )}
+    </section>
+  );
+}
+
 function RevenueProfitabilityTable({ ds }) {
   const [mode, setMode] = useState("quarterly");
   if (!ds.hasRevenue) return null;
@@ -986,6 +1066,112 @@ const NEWS_DATE_RANGES = [
   { key: "all", label: "All", days: Infinity },
 ];
 
+/* ------------------------------------------------------------
+   LIVE FETCH — used only when the uploaded workbook has no
+   "News Feed" / "Industry Data" sheets. Calls a public news API
+   directly from the browser (no server), in real time, on each
+   page view. Nothing here is persisted: it lives in React state
+   only and disappears on reload or re-upload, by design. Every
+   item comes straight from the API's own url/source fields —
+   nothing is invented or filled in.
+   ------------------------------------------------------------ */
+const NEWS_CATEGORY_KEYWORDS = [
+  ["Funding & Financial", /\b(funding|raise[sd]?|series [a-e]|investment|valuation|ipo|acquir|acquisition|merger)\b/i],
+  ["Partnerships", /\b(partner(ship|s)?|collaborat|tie-?up|alliance)\b/i],
+  ["Product & Launches", /\b(launch(es|ed)?|unveil|introduc|rollout|release[sd]?|new (product|feature|platform))\b/i],
+  ["Leadership", /\b(ceo|cfo|cto|appoint|hire[sd]?|joins as|steps down|resign|leadership)\b/i],
+  ["Events", /\b(summit|conference|webinar|event|expo|forum)\b/i],
+  ["Industry", /\b(industry|market( size| report| trend)?|sector|cagr)\b/i],
+];
+function guessNewsCategory(text) {
+  const t = text || "";
+  for (const [cat, re] of NEWS_CATEGORY_KEYWORDS) if (re.test(t)) return cat;
+  return "Company";
+}
+
+function useLiveNews(query) {
+  const [state, setState] = useState({ status: "idle", items: [] });
+  useEffect(() => {
+    if (!query) { setState({ status: "no-query", items: [] }); return; }
+    const apiKey = import.meta.env.VITE_GNEWS_API_KEY;
+    if (!apiKey) { setState({ status: "no-key", items: [] }); return; }
+
+    let cancelled = false;
+    setState({ status: "loading", items: [] });
+    const url = `https://gnews.io/api/v4/search?q=${encodeURIComponent(query)}&lang=en&max=10&sortby=publishedAt&apikey=${apiKey}`;
+
+    fetch(url)
+      .then(res => {
+        if (!res.ok) throw new Error(`API returned ${res.status}`);
+        return res.json();
+      })
+      .then(data => {
+        if (cancelled) return;
+        const items = (data.articles || [])
+          .filter(a => a && a.url && a.title)
+          .map(a => ({
+            title: a.title,
+            summary: a.description || "",
+            category: guessNewsCategory(`${a.title} ${a.description || ""}`),
+            publishedAt: a.publishedAt ? new Date(a.publishedAt) : null,
+            sourceName: a.source?.name || "Source",
+            sourceUrl: a.url,
+            secondarySourceName: null,
+            secondarySourceUrl: null,
+          }));
+        setState({ status: "success", items });
+      })
+      .catch(err => {
+        if (cancelled) return;
+        setState({ status: "error", items: [], message: err.message });
+      });
+
+    return () => { cancelled = true; };
+  }, [query]);
+  return state;
+}
+
+function LiveFetchBanner() {
+  return (
+    <div className="news-refresh">
+      <span className="news-refresh__stamp">● Live — fetched just now from the web</span>
+      <span className="news-refresh__note">Not saved anywhere; this list disappears on reload or re-upload and is fetched fresh each time.</span>
+    </div>
+  );
+}
+
+function LiveNewsFeed({ query, emptyHint }) {
+  const { status, items, message } = useLiveNews(query);
+
+  if (!query) {
+    return <div className="chart-empty">{emptyHint}</div>;
+  }
+  if (status === "no-key") {
+    return <div className="chart-empty">Live news fetching isn't configured yet — no API key is set for this dashboard.</div>;
+  }
+  if (status === "loading" || status === "idle") {
+    return <div className="chart-empty">Fetching live news for &quot;{query}&quot;…</div>;
+  }
+  if (status === "error") {
+    return (
+      <div className="chart-empty">
+        Live news is unavailable right now{message ? ` (${message})` : ""}. This can happen if the request was blocked by your browser or network — try reloading.
+      </div>
+    );
+  }
+  if (!items.length) {
+    return <div className="chart-empty">No live news found for &quot;{query}&quot; right now.</div>;
+  }
+  return (
+    <>
+      <LiveFetchBanner />
+      <div className="news-grid">
+        {items.map((item, i) => <NewsCard key={`${item.sourceUrl}-${i}`} item={item} />)}
+      </div>
+    </>
+  );
+}
+
 function NewsCard({ item }) {
   return (
     <div className="news-card">
@@ -1009,12 +1195,18 @@ function NewsUpdatesPage({ ds }) {
   const feed = ds.newsFeed;
 
   if (feed === null) {
+    const companyName = ds.companyInfo?.companyName;
+    const query = companyName && !/your company/i.test(companyName) ? companyName : null;
     return (
-      <PlaceholderSection
-        eyebrow="Not yet populated"
-        title="News & Updates"
-        note={'This section is populated by an independent daily research pipeline that writes a "News Feed" sheet into the mastersheet — this upload doesn\'t include one yet. Upload a workbook that has it, via "New upload" above, to see it here.'}
-      />
+      <section className="section">
+        <div className="fin-section__head">
+          <div className="section__title">News &amp; Updates</div>
+        </div>
+        <LiveNewsFeed
+          query={query}
+          emptyHint='Add a real "Company Name" in the Company Info sheet to fetch live news for your company.'
+        />
+      </section>
     );
   }
 
@@ -1084,12 +1276,23 @@ function IndustryCompetitorsPage({ ds }) {
   const data = ds.industryData;
 
   if (data === null) {
+    const companyName = ds.companyInfo?.companyName;
+    const cleanName = companyName && !/your company/i.test(companyName) ? companyName : null;
+    const tag = ds.companyInfo?.tags?.[0];
+    const query = cleanName ? `${cleanName} industry` : (tag ? `${tag} industry India` : null);
     return (
-      <PlaceholderSection
-        eyebrow="Not yet populated"
-        title="Industry & Competitors"
-        note={'This section is populated by an independent research pipeline that writes an "Industry Data" sheet into the mastersheet — this upload doesn\'t include one yet. Upload a workbook that has it, via "New upload" above, to see it here.'}
-      />
+      <section className="section">
+        <div className="fin-section__head">
+          <div className="section__title">Industry &amp; Competitors</div>
+        </div>
+        <div className="placeholder-page__note" style={{ marginBottom: 16 }}>
+          A structured competitor/market breakdown needs the researched "Industry Data" sheet, which this upload doesn't have. Showing live industry news headlines instead, fetched directly from the web — not a substitute for verified competitor analysis.
+        </div>
+        <LiveNewsFeed
+          query={query}
+          emptyHint='Add a "Company Name" or a "Tag 1" in the Company Info sheet to fetch live industry news.'
+        />
+      </section>
     );
   }
 
@@ -1498,11 +1701,6 @@ export default function App() {
           </div>
         </div>
         <div className="masthead__actions">
-          <div className="fy-tabs">
-            {dataset.fyData.map((f, i) => (
-              <button key={f.key} className={`fy-tab ${i === fyIndex ? "fy-tab--active" : ""}`} onClick={() => setFyIndex(i)}>{f.label}</button>
-            ))}
-          </div>
           <label className="replace-btn">
             <RefreshCw size={13} /> New upload
             <input type="file" accept=".xlsx,.xls" onChange={handleReplace} />
@@ -1529,8 +1727,17 @@ export default function App() {
           <ExecutiveSummary ds={dataset} />
           <BusinessDescription companyInfo={dataset.companyInfo} />
 
+          <KeyPerformanceIndicatorsTable ds={dataset} />
+
           <section className="section">
-            <div className="section__title">Key Metrics <span className="section__sub">— {fy.label} vs {fyIndex > 0 ? dataset.fyData[fyIndex - 1].label : "—"}</span></div>
+            <div className="fin-section__head">
+              <div className="section__title">Key Metrics <span className="section__sub">— {fy.label} vs {fyIndex > 0 ? dataset.fyData[fyIndex - 1].label : "—"}</span></div>
+              <div className="fy-tabs">
+                {dataset.fyData.map((f, i) => (
+                  <button key={f.key} className={`fy-tab ${i === fyIndex ? "fy-tab--active" : ""}`} onClick={() => setFyIndex(i)}>{f.label}</button>
+                ))}
+              </div>
+            </div>
             <div className="kpi-grid">
               {dataset.cardConfigs.map(cfg => (
                 <KpiCard key={cfg.key} cfg={cfg} ds={dataset} fyIndex={fyIndex} expanded={expanded} onToggle={onToggle} />
@@ -1807,6 +2014,14 @@ function GlobalStyles() {
       .fin-table__subtotal-row td { font-weight:600; border-top:1px solid var(--border); }
       .fin-table__subtotal-row td.fin-table__label-col { background:#fff; }
       .fin-table .delta { font-size:11px; padding:2px 6px; justify-content:flex-end; }
+
+      /* ---- Key Performance Indicators table: compact, emphasized business-line rows ---- */
+      .fin-table-wrap--kpi { border-color:var(--gold); border-width:1.5px; }
+      .fin-table--kpi tbody tr td.fin-table__label-col { font-weight:600; color:var(--brand); }
+      .fin-table--kpi tbody tr td:not(.fin-table__label-col) { font-family:'Inter',sans-serif; font-weight:500; font-variant-numeric:tabular-nums; }
+      .fin-table--kpi tbody tr:not(:last-child) td { border-bottom:1px solid var(--border); }
+      .fin-table__na { color:var(--muted); font-weight:400 !important; }
+      .fin-table__foot-note { display:flex; align-items:flex-start; gap:6px; margin-top:10px; font-size:11.5px; color:var(--muted); line-height:1.6; }
 
       /* ---- source links (used throughout Industry & Competitors / News) ---- */
       .src-link { display:inline-flex; align-items:center; gap:2px; font-family:'IBM Plex Mono',monospace; font-size:11px;
