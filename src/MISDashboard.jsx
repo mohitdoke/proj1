@@ -495,6 +495,471 @@ const COMPANY_CONFIGS = {
     showForecast: false,
     layout: "multipl",
   },
+  fastsurance: {
+    id: "fastsurance",
+    defaultDescription: {
+      companyName: "Insurance Samadhan",
+      description: "FASTSURANCE Consultants Private Limited (brand: Insurance Samadhan) is a consumer insurance-grievance " +
+        "redressal platform that helps policyholders register complaints against insurers and pursue resolution of " +
+        "unpaid, delayed or disputed claims and mis-sold policies. Revenue is earned through registration fees paid by " +
+        "consumers at the time of case intake and success-based commission fees on cases resolved in the consumer's favour.",
+      tags: ["Insurtech", "Grievance Redressal", "Claims Resolution"],
+      scaleMetrics: [],
+      strategicNote: null,
+    },
+    // Distinctive FASTSURANCE row names (note the source MIS's own spelling —
+    // "Registartion" — preserved verbatim, per the "Source metric labels
+    // preserved from the source MIS" rule in its Read Me sheet).
+    signals: [/registartion\s*fees/i, /commission\s*fees\s*\(net\s*of\s*gst\)/i, /other\s*income\/reciept/i],
+    revenueBaseKey: "Total Income",
+    revenueLabel: "Net Revenue",
+    // This MIS has no row literally named "EBITDA": "Total Expenses" already
+    // excludes Depreciation (a separate line item further down the sheet,
+    // subtracted only afterward to reach "Net Profit"), so "Profit/(Loss)" —
+    // Total Income minus Total Expenses — IS the EBITDA-equivalent figure by
+    // construction, not a guess. Verified numerically against every sampled
+    // month: Total Income − Total Expenses = Profit/(Loss) exactly.
+    keyAliases: { "EBITDA": "Profit/(Loss)" },
+    // "Indirect Expenses" doesn't exist as a single row here — the workbook's
+    // own P&L waterfall reaches EBITDA via Total Income − Total Expenses, so
+    // that's the row the Complete P&L's Operating Expenses line should show.
+    opexKey: "Total Expenses",
+    priorityOrder: [
+      "Total Income", "Registartion Fees (Net of GST)", "Commission Fees (Net of GST)", "Other Income/Reciept",
+      "Total Expenses", "EBITDA", "Net Profit", "Employee Benefit Cost", "Direct Expenses",
+      "Marketing & Selling Expenses", "Research & Development Expenses", "Legal, Recruitment & Professional Expenses",
+      "Office & Admin Expenses", "Finance & Interest Cost", "IT expenses", "Depreciation",
+    ],
+    // Verified numerically: these three rows sum exactly to Total Income in
+    // every sampled month.
+    pnlRevenueSubLines: [/^Registartion Fees \(Net of GST\)$/i, /^Commission Fees \(Net of GST\)$/i, /^Other Income\/Reciept$/i],
+    // ALLOW-LIST — this workbook's "Monthly Data" sheet interleaves ~15
+    // genuine P&L subtotal rows with well over a thousand individual
+    // agent-commission and vendor-spend ledger lines (real data, but
+    // transaction-level detail, never a dashboard KPI). Only the rows below
+    // are surfaced; everything else (every named-individual/vendor row) is
+    // silently left out of the KPI grid, P&L and charts — never summed into
+    // a card that would misrepresent an individual payee's spend as a
+    // company metric.
+    includeRowMatchers: [
+      /^Registartion Fees \(Net of GST\)$/i, /^Commission Fees \(Net of GST\)$/i, /^Other Income\/Reciept$/i,
+      /^Total Income$/i, /^Employee Benefit Cost$/i, /^Direct Expenses$/i, /^Marketing & Selling Expenses$/i,
+      /^Research & Development Expenses$/i, /^Legal, Recruitment & Professional Expenses$/i,
+      /^Office & Admin Expenses$/i, /^Finance & Interest Cost$/i, /^IT expenses$/i, /^Total Expenses$/i,
+      /^Profit\/\(Loss\)$/i, /^Depreciation$/i, /^Net Profit$/i,
+    ],
+    // Operational insurance KPIs the reference layout calls for (Total
+    // Registrations, Total Resolved Cases, Resolved Case Value, % Resolved).
+    // None of these currently exist as rows in this standardized MIS (it
+    // carries only the financial P&L) — matched semantically here so that
+    // the day a case-management/registrations row IS added to the sheet, it
+    // is picked up automatically with no code change; until then every cell
+    // below renders N/A with a footnote, per spec, rather than a guess.
+    kpi: {
+      rows: [
+        { label: "Total Registrations", slug: "totalRegistrations", matchers: [/total\s*registrations?/i, /number\s*of\s*registrations?/i, /registrations?\s*received/i, /new\s*registrations?/i], fmt: fmtNum },
+        { label: "Total Resolved Cases", slug: "totalResolvedCases", matchers: [/total\s*resolved\s*cases?/i, /cases?\s*resolved/i, /resolved\s*cases?/i], fmt: fmtNum },
+        { label: "Total Resolved Case Value (In Cr.)", slug: "resolvedCaseValue", matchers: [/resolved\s*(case\s*)?value/i, /value\s*of\s*(cases?\s*)?resolved/i, /amount\s*resolved/i], fmt: (v) => fmtCrPlain(v, 2) },
+        { label: "% Resolved", slug: "pctResolved", matchers: [/%\s*resolved/i, /resolution\s*rate/i, /resolved\s*%/i], fmt: fmtPct },
+      ],
+    },
+    showForecast: false,
+    layout: "fastsurance",
+  },
+  apexFutureLabs: {
+    id: "apexFutureLabs",
+    defaultDescription: {
+      companyName: "Vitra.ai",
+      description: "Apex Future Labs Private Limited (brand: Vitra.ai) is a Generative-AI model delivered as SaaS for " +
+        "language translation across text, images, video and websites (Translate Image, Translate Text, Translate " +
+        "Videos, Translate Website). Revenue is earned through customer subscriptions/usage on the platform.",
+      tags: ["Generative AI SaaS", "Language Translation", "Enterprise Content Localization"],
+      scaleMetrics: [],
+      strategicNote: null,
+    },
+    // Distinctive Vitra row names from the CORRECTED standardized workbook
+    // (the previously-provided file had every row's label column corrupted —
+    // see git history / prior session notes — this is the fixed version,
+    // verified label-by-label against its own Read Me).
+    signals: [/^total\s*no\.?\s*of\s*customers?$/i, /^arpa$/i, /^p&l\s*—\s*total\s*income$/i, /^p&l\s*—\s*gross\s*profit$/i, /^p&l\s*—\s*net\s*profit$/i],
+    // The workbook's own Read Me: "Column A = KPI/Metric name ... P&L rows are
+    // explicitly labeled to avoid unlabeled/ambiguous rows." "P&L — Total
+    // Income" is the all-in revenue line (verified: ≈ GST sales + Non-GST
+    // Sales + Other Income + Interest Income, to within a single month's
+    // rounding across 44 populated months) — used directly rather than
+    // re-derived from its components.
+    revenueBaseKey: "P&L — Total Income",
+    revenueLabel: "Net Revenue",
+    // Verified numerically against every populated month:
+    //   P&L — Gross Profit = P&L — Total Income − P&L — COGS (exact)
+    //   P&L — Net Profit   = P&L — Gross Profit − P&L — Total Expenses (exact)
+    // There is no separate Depreciation/Interest/Tax line below "P&L — Net
+    // Profit" in this sheet's waterfall — it IS the EBITDA-equivalent by
+    // construction, not a guess. Only EBITDA is aliased (not a separate "Net
+    // Profit"), per the reference spec ("Net Revenue, Growth, Gross Profit,
+    // Gross Margin, EBITDA, EBITDA %" — no distinct net-profit line requested).
+    keyAliases: {
+      "Gross Profit": "P&L — Gross Profit",
+      "EBITDA": "P&L — Net Profit",
+      "Direct Expenses": "P&L — COGS",
+    },
+    opexKey: "P&L — Total Expenses",
+    priorityOrder: [
+      "P&L — Total Income", "GST sales", "Non-GST Sales", "P&L — Other Income", "P&L — Interest Income",
+      "Direct Expenses", "Gross Profit", "P&L — Total Expenses", "EBITDA",
+      "Total no. of customers", "ARPA", "Active Customers", "Total employees",
+    ],
+    // Verified: GST sales + Non-GST Sales + Other Income + Interest Income
+    // reconstructs Total Income to within one month's rounding out of 44
+    // populated months (residual < 3% that one month, zero every other).
+    pnlRevenueSubLines: [/^GST sales$/i, /^Non-GST Sales$/i, /^P&L — Other Income$/i, /^P&L — Interest Income$/i],
+    // Redundant/legacy rows dropped from the Key Metrics grid so the same
+    // figure (or a broken one) never shows twice or shows nonsense:
+    //  - "P&L — Particulars": a leftover template row whose "values" are
+    //    literally the header dates re-typed as data, not a real KPI.
+    //  - "One-time" and "MRR*"/"ARR (MRR x 12)": all three equal "P&L — Total
+    //    Income" (or 12x it) in every sampled month — this workbook has no
+    //    distinct recurring-vs-one-time revenue split despite the labels;
+    //    showing them as separate cards would misrepresent total revenue as
+    //    a distinct "MRR" metric.
+    //  - "Booked revenues" duplicates "P&L — Booked Revenue" (same source,
+    //    two vintages) — the P&L-prefixed one is kept.
+    //  - "Gross margins": a precomputed ratio row, redundant with this
+    //    dashboard's own computed Gross Margin (which uses the same verified
+    //    Gross Profit / Total Income).
+    //  - "Saas Revenue" / "Enterprise Revenue" / "P&L — Enterprise India" /
+    //    "P&L — Enterprise Total": 3–12 populated months out of 48, abandoned
+    //    early segment-tracking attempts, not a reliable ongoing metric.
+    //  - "P&L — Edtech" / "P&L — Digital Media" / "P&L — Others" /
+    //    "P&L — Social Media" / "P&L — Media": entirely zero/null every month.
+    //  - "P&L — B2C - GST" / "P&L — B2C - Non GST" / "P&L — B2C - Total": a
+    //    sub-split of the GST sales / Non-GST Sales rows already shown.
+    //  - "Balance as per bank" (correct spelling, only 3 populated months) vs
+    //    "Balance asper bank" (source's own typo, 36 populated months) — same
+    //    concept from two vintages; the fuller one is kept under its own
+    //    (as-typed) label rather than merged, since no dashboard KPI depends
+    //    on it either way.
+    //  - "S & M %": stored as percentage-point values (e.g. 1.85 meaning
+    //    1.85%), not the 0–1 fraction this dashboard's percentage formatter
+    //    expects — showing it through fmtPct would misrender ~185%. Left out
+    //    rather than risk a 100x-wrong display.
+    //  - "Average Recovery period for invoices": unit is ambiguous from the
+    //    data alone (tiny fractional values, not a clean day-count) — left
+    //    out rather than guessed at.
+    //  - "Receivables due over 60 days" / "Payables due over 60 days": zero
+    //    in every populated month. "Unbilled (Yet to Invoice)" duplicates
+    //    "Unbilled". "Contractors": only 3 populated months.
+    excludeRowMatchers: [
+      /^P&L — Particulars$/i, /^One-time$/i, /^MRR\*$/i, /^ARR \(MRR x 12\)$/i, /^Booked revenues$/i, /^Gross margins$/i,
+      /^Saas Revenue$/i, /^Enterprise Revenue$/i, /^P&L — Enterprise India$/i, /^P&L — Enterprise Total$/i,
+      /^P&L — Edtech$/i, /^P&L — Digital Media$/i, /^P&L — Others$/i, /^P&L — Social Media$/i, /^P&L — Media$/i,
+      /^P&L — B2C - GST$/i, /^P&L — B2C - Non GST$/i, /^P&L — B2C - Total$/i, /^Balance as per bank$/i,
+      /^S & M %$/i, /^Average Recovery period for invoices$/i, /^Receivables due over 60 days$/i,
+      /^Payables due over 60 days$/i, /^Unbilled \(Yet to Invoice\)$/i, /^Contractors$/i,
+    ],
+    kpi: {
+      rows: [
+        { label: "No. of Customers", slug: "customers", matchers: [/^total\s*no\.?\s*of\s*customers?$/i, /^total\s*number\s*of\s*customers?$/i], fmt: fmtNum },
+        { label: "ARPU (in Thousands)", slug: "arpu", matchers: [/^arpa$/i, /^arpu$/i, /average\s*revenue\s*per\s*account/i, /average\s*revenue\s*per\s*user/i], fmt: fmtRupeeThousands },
+      ],
+    },
+    // "Total no. of customers" and "Active Customers" are point-in-time
+    // counts (as of period end), not something that accrues within a period —
+    // read as the last value in the period, same treatment as MULTIPL/
+    // GrayQuest's own point-in-time counts.
+    stockRowMatchers: [/^total\s*no\.?\s*of\s*customers?$/i, /^active\s*customers?$/i, /^cash\s*in\s*hand$/i, /^total\s*trade\s*receivables$/i, /^total\s*trade\s*payables$/i, /^beginning\s*cash\s*balance$/i, /^ending\s*cash\s*balance$/i, /^balance\s*asper\s*bank$/i],
+    // ARPA (Average Revenue Per Account) and CAC (Customer Acquisition Cost)
+    // are per-unit averages, not sums across months — averaged like
+    // GrayQuest's take rate, formatted as a plain ₹ amount.
+    rupeeAvgRowMatchers: [/^arpa$/i, /^cac$/i],
+    countRowMatchers: [
+      /^total\s*no\.?\s*of\s*customers?$/i, /^active\s*customers?$/i, /^new\s*customers?\s*-\s*b2b$/i, /^new\s*customers?\s*-\s*b2c$/i,
+      /^total\s*employees$/i, /^no\.?\s*of\s*men\s*employees$/i, /^no\.?\s*of\s*women\s*employees$/i, /^new\s*employees$/i,
+    ],
+    showForecast: false,
+    layout: "apexFutureLabs",
+  },
+  leegality: {
+    id: "leegality",
+    defaultDescription: {
+      companyName: "Leegality",
+      description: "Grey Swift Private Limited (brand: Leegality) is a digital-signature and e-stamping " +
+        "infrastructure platform that lets businesses execute legally valid electronic signatures (Aadhaar and " +
+        "non-Aadhaar eSign, digital signature certificates) and pay stamp duty online. Revenue is earned through " +
+        "per-transaction eSign/stamp fees and recurring enterprise subscription plans.",
+      tags: ["Digital Signature Infrastructure", "e-Stamping", "Transactional SaaS"],
+      scaleMetrics: [],
+      strategicNote: null,
+    },
+    // Distinctive Leegality row names — product-type eSign revenue lines and
+    // its stamp-ordering row, none of which appear in the other companies'
+    // sheets.
+    signals: [/virtual\s*sign/i, /automated\s*sign/i, /total\s*for\s*transactional\s*esign/i, /number\s*of\s*stamps\s*ordered/i, /docsigner/i],
+    revenueBaseKey: "Total Revenue",
+    revenueLabel: "Net Revenue",
+    // Canonical aliases onto this workbook's real row names — verified
+    // numerically: Gross Profit (With Interest Income) = Total Revenue −
+    // Total Cost of Goods Sold; EBITDA (Including Interest Income) = that
+    // Gross Profit − Total Operating Expense; Net Profit/Loss = EBITDA
+    // (Including) − (Depreciation + ESOP). The "With/Including Interest
+    // Income" variants are the ones aliased since Total Revenue (the
+    // dashboard's revenue base) itself includes Interest Income & Other
+    // Charges — pairing them keeps every derived margin internally
+    // consistent with its own numerator/denominator.
+    keyAliases: {
+      "Gross Profit": "Gross Profit (With Interest Income)",
+      "EBITDA": "EBITDA (Including Interest Income)",
+      "Net Profit": "Net Profit/Loss",
+      "Direct Expenses": "Total Cost of Goods Sold",
+    },
+    opexKey: "Total Operating Expense",
+    priorityOrder: [
+      "Total Revenue", "Direct Expenses", "Gross Profit", "Total Operating Expense", "EBITDA", "Net Profit",
+      "Total for Transactional eSign", "Transactional- Stamp Convenience", "Subscription Realisation", "Service Fee",
+      "Sale of Doc Signer Certificate", "Interest Income & Other Charges",
+    ],
+    // Verified numerically: these seven rows sum exactly to Total Revenue
+    // (the six operating-revenue lines sum to "Total for Operating Revenue",
+    // which plus Interest Income & Other Charges equals Total Revenue). The
+    // more granular per-product eSign rows (Aadhar, Virtual Sign, DSC, ...)
+    // are themselves the components of "Total for Transactional eSign" and
+    // are deliberately left out of this list — including them alongside
+    // their own subtotal would double-count the revenue mix chart/P&L.
+    // NOTE: "Others" is deliberately excluded from this list even though it
+    // is a genuine (if tiny — a few tens of rupees/month) revenue-mix line.
+    // The source workbook reuses the exact label "Others" for a second,
+    // unrelated row further down (a near-zero expense-category line in the
+    // Operating Expenses section) — parseWorkbook keys KPI rows by label, so
+    // the second occurrence silently overwrites the first. Rather than have
+    // the dashboard show a number that might actually be either row
+    // depending on sheet order, both are left out entirely (immaterial
+    // either way: well under ₹100 against tens of millions of revenue).
+    pnlRevenueSubLines: [
+      /^Total for Transactional eSign$/i, /^Transactional-\s*Stamp Convenience$/i, /^Subscription Realisation$/i,
+      /^Service Fee$/i, /^Sale of Doc Signer Certificate$/i, /^Interest Income & Other Charges$/i,
+    ],
+    // "m" is a leftover month-index row (values 1..12, not a KPI); the
+    // Without-Interest-Income Gross Profit variant and both % rows duplicate
+    // the aliased With-Interest-Income figures already shown as canonical
+    // Gross Profit/Gross Margin; "Total for Operating Revenue" and "Total"
+    // (Depreciation+ESOP memo) are subtotals with no standalone meaning once
+    // their components are shown; "EBITDA(Excluding Interest Income)"
+    // duplicates the aliased canonical EBITDA; "Avg per day eSign count" is a
+    // pre-averaged rate this dashboard has no clean cross-period aggregation
+    // for (unlike take-rate-style % rows) and is left out rather than summed
+    // into a meaningless quarter/year total; "Others" is excluded per the
+    // label-collision note above. The per-product eSign revenue rows (Aadhar,
+    // Virtual Sign, Automated Sign, DSC, ...) and the granular Operating
+    // Expense sub-lines (Consultants Expense, HR Expenses, Salaries, ...) are
+    // real data but are themselves the components of rows already shown
+    // (Total for Transactional eSign; Total Operating Expense) — excluded
+    // from the generic Key Metrics grid so the same rupee isn't shown twice,
+    // once inside its subtotal and once as its own tiny card.
+    excludeRowMatchers: [
+      /^m$/i, /^Others$/i, /^Gross Profit \(Without Interest Income\)$/i, /^Gross profit % \(Without Interest Income\)$/i,
+      /^Gross profit % \(With Interest Income\)$/i, /^Total for Operating Revenue$/i, /^Total$/i,
+      /^EBITDA\(Excluding Interest Income\)$/i, /^Avg per day eSign count$/i, /^Employee Compensation -ESOP$/i,
+      /^Aadhar$/i, /^Virtual Sign$/i, /^Automated Sign$/i, /^DSC$/i, /^Expiration Income$/i, /^Payment Collect$/i,
+      /^DocSigner$/i, /^Doc Approval$/i, /^Face Match$/i, /^Quick Sign$/i, /^Visual Sign$/i, /^Smart Liveliness$/i,
+      /^Whatsapp Session$/i, /^NESL$/i,
+      /^Bad Debt and Other write offs$/i, /^Consultants Expense$/i, /^Finance Cost$/i, /^HR Expenses$/i,
+      /^Legal Expenses-/i, /^Office Expenses$/i, /^Operational Technology & Testing Expenses$/i,
+      /^Round off expenses$/i, /^Salaries and Employee Wages$/i, /^Sales and Marketing Expense$/i,
+      /^Insurance Expense$/i, /^Gratuity$/i, /^Infrastructure Expenses$/i, /^Partner's Direct Commission$/i,
+      /^DPDP Outsourcing$/i, /^Cost of esign$/i, /^Cost of Doc Signer Certificate$/i, /^Stamp Processing Expense$/i,
+    ],
+    // True percentage rows (already fractions) — averaged across the period
+    // like GrayQuest's take rate, not summed.
+    rateRowMatchers: [/%\s*of\s*aadhaar\s*variants/i, /%\s*of\s*non-aadhaar\s*variants/i],
+    // Point-in-time snapshot rows — last reading in the period, not a sum
+    // (an "active subscription wallets" count summed across 3 months would
+    // triple-count the same customers still active in month 2 and 3).
+    stockRowMatchers: [
+      /active\s*subscription\s*wallets/i, /monthly\s*active\s*organisational\s*wallets/i, /^mrr$/i, /^arr$/i,
+      /esigns?\s*-\s*till\s*date/i, /stamps-\s*till\s*date/i, /cash\s*in\s*the\s*bank/i, /amount\s*receivable/i,
+      /unrealised\s*revenue/i,
+    ],
+    // Plain-count rows — formatted as a number, not ₹ Cr. ("Total number of
+    // eSigns" and "Number of Stamps Ordered per period" are the per-period
+    // flow counts this dashboard's e-sign/stamp KPI table sums per FY/quarter;
+    // the "- till date" / "as on last day" variants above are their
+    // cumulative/snapshot counterparts, shown as of period-end instead.)
+    countRowMatchers: [
+      /number\s*of\s*invoices/i, /number\s*of\s*new\s*wallets\s*invoiced/i, /number\s*of\s*new\s*subscription\s*wallets/i,
+      /total\s*number\s*of\s*esigns/i, /number\s*of\s*stamps\s*ordered\s*per\s*period/i,
+      /active\s*subscription\s*wallets/i, /monthly\s*active\s*organisational\s*wallets/i,
+      /esigns?\s*-\s*till\s*date/i, /stamps-\s*till\s*date/i,
+    ],
+    kpi: {
+      rows: [
+        // Anchored (not a loose substring match): the workbook also carries
+        // "Number of esigns - till date" (a cumulative snapshot, handled via
+        // stockRowMatchers below) and an unanchored /number of e-?signs/
+        // pattern would match that row too — alphabetically ahead of "Total
+        // number of eSigns" in an unordered sort, so it would silently win
+        // and this KPI would show the wrong (cumulative, not per-period) figure.
+        { label: "No. of e-signs", slug: "esigns", growthSlug: "esignsGrowth", matchers: [/^total\s*number\s*of\s*esigns$/i, /^number\s*of\s*e-?signs$/i] },
+        { label: "No. of stamps", slug: "stamps", growthSlug: "stampsGrowth", matchers: [/number\s*of\s*stamps\s*ordered\s*per\s*period/i, /^number\s*of\s*stamps$/i] },
+      ],
+      // Point-in-time, no YoY growth row in the reference layout.
+      stockRow: { label: "No. of total subscription accounts", slug: "subscriptionAccounts", matchers: [/active\s*subscription\s*wallets/i, /total\s*subscription\s*accounts/i] },
+    },
+    showForecast: false,
+    layout: "leegality",
+  },
+  finbox: {
+    id: "finbox",
+    defaultDescription: {
+      companyName: "FinBox",
+      description: "MOSHPIT Technologies Private Limited (brand: FinBox) is an API-first embedded-lending and " +
+        "credit-infrastructure platform — risk intelligence, a low-code SDK, Device Connect, underwriting and " +
+        "collections workflows and rule-engine applications that let banks, NBFCs and digital platforms embed " +
+        "lending into their own products.",
+      tags: ["Embedded Lending", "Credit Infrastructure", "API-First B2B SaaS"],
+      scaleMetrics: [],
+      strategicNote: null,
+    },
+    // Distinctive FinBox row names — none appear in any other company's sheet.
+    signals: [/^aws\s*expenses$/i, /^software\s*expenses$/i, /-ebitda\s*excl\.?\s*exceptional\s*items/i, /^sg&a\s*expenses$/i, /^-adj\s*pbt$/i],
+    // Per the workbook's own Read Me & spec: "Net Revenue" is the requested
+    // label. Verified numerically: Net Revenue = Gross Revenue = Total
+    // Revenue in every sampled month (three names for the same figure in
+    // this sheet) — Net Revenue is used as the single canonical row; the
+    // other two are excluded below rather than shown as duplicate cards.
+    revenueBaseKey: "Net Revenue",
+    revenueLabel: "Net Revenue",
+    // "Gross Margin" is a literal row in this sheet (a currency figure
+    // despite the name) — verified exactly: Gross Margin = Total Revenue −
+    // AWS Expenses − Software Expenses, every sampled month. Aliased onto the
+    // canonical "Gross Profit" the rest of the dashboard already knows how to
+    // render (and margin against Net Revenue).
+    // EBITDA: this sheet carries TWO vintages that genuinely diverge in their
+    // overlap window (verified — e.g. Mar-2025: old "EBITDA" = -0.805 Cr vs
+    // new "-EBITDA excl. exceptional items" = -13.337 Cr, an exceptional-item
+    // swing). Per the Read Me's own consolidation rule ("For overlapping
+    // periods, the latest/revised source is used when it contains a nonblank
+    // value"), the newer, revised vintage is preferred whenever it has a
+    // reading; the older "EBITDA" row only fills in the early months
+    // (Apr-2020–Mar-2022) the newer vintage doesn't cover at all.
+    keyAliases: {
+      "Gross Profit": "Gross Margin",
+      "EBITDA": ["-EBITDA excl. exceptional items", "EBITDA"],
+    },
+    priorityOrder: [
+      "Net Revenue", "AWS Expenses", "Software Expenses", "Gross Profit", "S&M Expenses",
+      "Employee Benefit Expenses", "SG&A Expenses", "Other Expenses", "EBITDA",
+      "-Recurring Revenue", "-One time Revenue",
+    ],
+    // Verified: "-One time Revenue" + "-Recurring Revenue" sum exactly to Net
+    // Revenue in every month both are populated (the newer-vintage months
+    // only — older months have no revenue-mix split, left blank rather than
+    // guessed).
+    pnlRevenueSubLines: [/^-One time Revenue$/i, /^-Recurring Revenue$/i],
+    // "Gross Revenue"/"Total Revenue" duplicate Net Revenue exactly (see
+    // above). "(+) Other Income", "(-) Credits/Discounts", "(-) GST/TDS" are
+    // near-always-zero adjustment lines already folded into Net Revenue,
+    // not a standalone metric. "YoY Growth" is a literal precomputed row —
+    // excluded so the dashboard's own consistently-defined GrowthBadge (used
+    // by every other company) is the one YoY figure shown, not a second,
+    // differently-defined number. "GM (%)" / "EBITDA (%)" / "-Adj PBT%" are
+    // precomputed ratios redundant with this dashboard's own computed
+    // margins (verified GM (%) matches Gross Profit/Net Revenue exactly).
+    excludeRowMatchers: [
+      /^Gross Revenue$/i, /^Total Revenue$/i, /^\(\+\) Other Income$/i, /^\(-\) Credits\/Discounts$/i,
+      /^\(-\) GST\/TDS$/i, /^YoY Growth$/i, /^GM \(%\)$/i, /^EBITDA \(%\)$/i, /^-Adj PBT%$/i,
+    ],
+    // Source MIS is labelled INR Cr throughout (per its Read Me) — every
+    // currency row must skip fmtCr's /1e7 (which assumes raw rupees).
+    alreadyCrRowMatchers: [
+      /^Net Revenue$/i, /^Gross Profit$/i, /^S&M Expenses$/i, /^Employee Benefit Expenses$/i, /^SG&A Expenses$/i,
+      /^Other Expenses$/i, /^EBITDA$/i, /^Finance Costs$/i, /^Depreciation & Amortization Costs$/i,
+      /^Profit before exceptional and extraordinary items and tax/i, /^Deferred tax$/i, /^Profit$/i,
+      /^-One time Revenue$/i, /^-Recurring Revenue$/i, /^\(-\)Exceptional Items\/Credit notes$/i, /^\+ Other Income$/i,
+      /^-Adj PBT$/i, /^Profit\/\(Loss\)$/i,
+    ],
+    // Operational KPIs the reference layout calls for (Embedded Finance %,
+    // Device Connect %, Bank Connect %, Bureau Connect %, MarketX/Sentinel %)
+    // — none of these exist as rows in this standardized MIS (confirmed
+    // against every one of its 30 rows); matched semantically so a future
+    // upload picks them up automatically, but every cell renders N/A today
+    // rather than a guessed figure, per spec.
+    kpi: {
+      rows: [
+        { label: "Embedded Finance %", slug: "embeddedFinance", matchers: [/embedded\s*finance/i], fmt: fmtPct },
+        { label: "Device Connect %", slug: "deviceConnect", matchers: [/device\s*connect/i], fmt: fmtPct },
+        { label: "Bank Connect %", slug: "bankConnect", matchers: [/bank\s*connect/i], fmt: fmtPct },
+        { label: "Bureau Connect %", slug: "bureauConnect", matchers: [/bureau\s*connect/i], fmt: fmtPct },
+        { label: "MarketX / Sentinel %", slug: "marketXSentinel", matchers: [/market\s*x/i, /sentinel/i], fmt: fmtPct },
+      ],
+    },
+    showForecast: false,
+    layout: "finbox",
+  },
+  fundamento: {
+    id: "fundamento",
+    defaultDescription: {
+      companyName: "Fundamento",
+      description: "Fundamento is an AI-powered Voice Agent solution for contact centres — an API-first, no-code, " +
+        "multilingual platform deployable on cloud or on-prem, providing real-time agent guidance and conversational " +
+        "intelligence. Revenue is earned on a per-pulse (usage-based) pricing model.",
+      tags: ["Conversational AI", "Contact Centre Voice Agents", "Usage-Based SaaS"],
+      scaleMetrics: [],
+      strategicNote: null,
+    },
+    // Distinctive Fundamento row names — "pulse" doesn't appear in any other
+    // company's sheet (note the source's own spelling, "Cummulative", with
+    // two Ms — preserved verbatim; the regex below matches either spelling).
+    signals: [/cum+ulative\s*pulses/i, /^pulse\s*per\s*month$/i, /^revenue\s*per\s*pulse$/i],
+    // The source row is literally named "Total Revenue"; the reference spec
+    // calls it "Gross Revenue" — same underlying figure, dashboard-facing
+    // label only.
+    revenueBaseKey: "Total Revenue",
+    revenueLabel: "Gross Revenue",
+    // This workbook's own header row has a data-quality bug: the year field
+    // is incremented one year too early for each Oct/Nov/Dec run, then
+    // corrected again the following January (verified: columns read
+    // Jan..Sep-2025, Oct..Dec-2026, Jan..Mar-2026, Apr-2026.. — i.e. every
+    // Oct/Nov/Dec is mislabeled a year ahead of its true position in the
+    // sequence). Left uncorrected, FY/quarter grouping would scatter this
+    // sheet's real monthly figures into the wrong fiscal years. See
+    // `forceConsecutiveMonths` in buildDataset — every column's date is
+    // reconstructed as a strict one-month step from the (correctly-labeled)
+    // first column instead of trusting each column's own header cell.
+    forceConsecutiveMonths: true,
+    // This sheet has only 3 P&L rows: Total Revenue, Total Cost, EBITDA — no
+    // separate COGS/Opex split. Verified numerically across every populated
+    // month: EBITDA = Total Revenue − Total Cost, exactly. There is therefore
+    // no reliable, distinct "Gross Profit" figure to show here (it would be
+    // identical to EBITDA, falsely implying two different profitability
+    // levels that don't actually exist in this MIS) — Gross Margin is
+    // intentionally left as N/A rather than aliased to EBITDA. "Total Cost"
+    // is instead wired as the Operating Expenses line so the Complete P&L
+    // reflects this sheet's real (flatter) structure.
+    opexKey: "Total Cost",
+    priorityOrder: ["Total Revenue", "Total Cost", "EBITDA", "Cummulative Pulses", "Pulse per month", "Revenue Per Pulse"],
+    pnlRevenueSubLines: [],
+    // "Cummulative Pulses" resets to zero every April (verified: it's a
+    // fiscal-year-to-date running total, not a lifetime counter) — so the
+    // last reading in a period is exactly right for both views: for a full
+    // FY it's the FY's total pulse count; for Q4 specifically it's also the
+    // full-year total (since the FY-to-date counter has, by Q4, accumulated
+    // the whole year) — which is why the reference layout asks for this KPI
+    // "across FY25/FY26/Q4FY25/Q4FY26" and no other quarters. Read as the
+    // last value in the period, not summed (summing would double-count).
+    stockRowMatchers: [/cum+ulative\s*pulses/i],
+    countRowMatchers: [/^pulse\s*per\s*month$/i, /cum+ulative\s*pulses/i],
+    // Revenue Per Pulse is a per-unit average (verified: = Total Revenue ÷
+    // Pulse per month, exactly, every populated month) — averaged across a
+    // period like a rate, formatted as a plain ₹ amount, not summed.
+    rupeeAvgRowMatchers: [/^revenue\s*per\s*pulse$/i],
+    kpi: {
+      rows: [
+        { label: "Cumulative Pulses", slug: "cumulativePulses", matchers: [/cum+ulative\s*pulses/i], fmt: fmtNum },
+      ],
+    },
+    showForecast: false,
+    layout: "fundamento",
+  },
 };
 
 function detectCompanyConfig(kpiKeys) {
@@ -571,25 +1036,116 @@ const PRIORITY_ORDER = [
 ];
 
 function buildDataset(parsed, companyInfo, companyConfig = COMPANY_CONFIGS.easyrewardz) {
-  const { months, kpis, headcount } = parsed;
+  let { months, kpis, headcount } = parsed;
+  // A small number of source workbooks have a genuine bug in their own
+  // header row: the year field is incremented one year too early for a run
+  // of Oct/Nov/Dec columns, then corrected again the following January
+  // (verified in Fundamento's file: columns literally read Jan..Sep-2025,
+  // Oct..Dec-2026, Jan..Mar-2026, Apr-2026.. — the Oct-Dec columns are
+  // mislabeled a year ahead of where they actually sit in the sequence).
+  // Rather than trust those broken header dates for FY/quarter grouping
+  // (which would scatter real data into a nonsensical fiscal year), a
+  // company config can opt into `forceConsecutiveMonths: true` — this
+  // reconstructs every column's date as a strict one-month step from the
+  // FIRST column (which is always correctly labeled in every file seen so
+  // far), so the sheet's actual chronological, consecutive-monthly
+  // structure is respected regardless of what a later column's header cell
+  // happens to say. Values themselves are never touched — only which FY/
+  // quarter bucket a column's values are grouped into.
+  if (companyConfig.forceConsecutiveMonths && months.length) {
+    const y0 = months[0].y, m0 = months[0].m;
+    months = months.map((mo, i) => {
+      const total = y0 * 12 + (m0 - 1) + i;
+      const y = Math.floor(total / 12), m = (total % 12) + 1;
+      return { y, m, label: monthLabel(y, m), key: `${y}-${String(m).padStart(2, "0")}` };
+    });
+  }
   const fyGroups = buildFYGroups(months);
   const qGroups = buildQuarterGroups(months);
   const revenueBaseKey = companyConfig.revenueBaseKey || "Total Revenue";
   const revenueLabel = companyConfig.revenueLabel || "Revenue";
   const priorityOrder = companyConfig.priorityOrder || PRIORITY_ORDER;
+  // KEY ALIASES — a company's sheet may express a canonical dashboard concept
+  // (Gross Profit, EBITDA, Net Profit, Direct Expenses) under its own real MIS
+  // row name (e.g. Leegality's "Net Profit/Loss", FASTSURANCE's "Profit/(Loss)"
+  // standing in for EBITDA since Depreciation is a separate line below it).
+  // `keyAliases` maps { canonicalName: actualRowLabelInThisSheet } — when the
+  // actual row exists, its values are copied onto the canonical key (never
+  // invented, never re-derived — the exact same numbers, just addressable
+  // under the name the rest of the dashboard already knows how to render) and
+  // the original row name is hidden from the generic KPI-card grid so the
+  // same figure never appears twice under two different labels.
+  // A canonical key may also be given as an ORDERED ARRAY of candidate source
+  // rows (e.g. FinBox's two-vintage EBITDA: newer "-EBITDA excl. exceptional
+  // items" preferred, older "EBITDA" filling in only the months the newer
+  // vintage doesn't cover) — this merges them month-by-month, taking the
+  // first source in the list that has a real (non-null) reading for that
+  // specific month, per the workbook's own Read Me rule ("For overlapping
+  // periods, the latest/revised source is used when it contains a nonblank
+  // value"). A plain string keeps working exactly as before (single source,
+  // no merge) — fully backward-compatible with fastsurance/leegality's usage.
+  const keyAliases = companyConfig.keyAliases || {};
+  const aliasedOriginalKeys = new Set();
+  const aliasCanonicalKeys = new Set();
+  Object.entries(keyAliases).forEach(([canonical, actual]) => {
+    const isMerge = Array.isArray(actual);
+    const sources = isMerge ? actual : [actual];
+    const validSources = sources.filter(s => kpis[s] !== undefined);
+    if (!validSources.length) return;
+    // A single-string alias only fires when the canonical name doesn't
+    // already exist as its own raw row (the original, narrower behaviour —
+    // unchanged for fastsurance/leegality/apexFutureLabs). A multi-source
+    // MERGE always (re)computes, even when the canonical name happens to be
+    // identical to one of its own source rows — e.g. FinBox's older MIS
+    // vintage is itself literally named "EBITDA", the same name the merged,
+    // newest-preferred series should be addressable under; without this, the
+    // merge would silently no-op because "EBITDA" already "exists".
+    if (isMerge || kpis[canonical] === undefined) {
+      kpis[canonical] = months.map((_, i) => {
+        for (const s of validSources) {
+          const v = kpis[s][i];
+          if (typeof v === "number") return v;
+        }
+        return null;
+      });
+      aliasCanonicalKeys.add(canonical);
+    }
+    // Hide every *other* source row from the generic grid (the merged
+    // canonical key is what should surface) — but never hide the canonical
+    // name itself, even when it's also one of the source rows.
+    validSources.forEach(s => { if (s !== canonical) aliasedOriginalKeys.add(s); });
+  });
   // Some workbooks carry redundant duplicate rows of a metric already shown
   // elsewhere, just in a different unit (e.g. MULTIPL's "Revenue (INR Lakhs)"
   // duplicating "Total Revenue", or "Monthly Burn (INR million)" duplicating
   // "Monthly Burn") — these are dropped entirely rather than surfaced as a
   // second, confusingly-scaled card for the same underlying figure.
   const excludeMatchers = companyConfig.excludeRowMatchers || [];
-  const kpiKeys = Object.keys(kpis).filter(k => !excludeMatchers.some(re => re.test(k))).sort((a, b) => {
-    const ia = priorityOrder.indexOf(a), ib = priorityOrder.indexOf(b);
-    if (ia === -1 && ib === -1) return a.localeCompare(b);
-    if (ia === -1) return 1;
-    if (ib === -1) return -1;
-    return ia - ib;
-  });
+  // ALLOW-LIST — a small number of workbooks (e.g. FASTSURANCE's) interleave
+  // genuine P&L subtotal rows with hundreds/thousands of ledger-detail rows
+  // (per-agent commission lines, per-vendor spend lines) that are real data
+  // but far too granular to ever be a dashboard KPI. `includeRowMatchers`,
+  // when a company config defines it, keeps ONLY rows matching at least one
+  // pattern — the opposite of excludeRowMatchers's blacklist — so a sheet
+  // like that surfaces its ~15 meaningful subtotal rows instead of ~1,400
+  // one-off "KPI cards", one per payee name.
+  const includeMatchers = companyConfig.includeRowMatchers || null;
+  const kpiKeys = Object.keys(kpis)
+    .filter(k => !aliasedOriginalKeys.has(k))
+    // Canonical alias targets (e.g. FASTSURANCE's "EBITDA" ← "Profit/(Loss)")
+    // are deliberately synthesized by this company's own config, not raw
+    // sheet noise — they always pass through, even when an include-list only
+    // names the original row, or an exclude pattern would otherwise happen to
+    // match the canonical name.
+    .filter(k => aliasCanonicalKeys.has(k) || !excludeMatchers.some(re => re.test(k)))
+    .filter(k => aliasCanonicalKeys.has(k) || !includeMatchers || includeMatchers.some(re => re.test(k)))
+    .sort((a, b) => {
+      const ia = priorityOrder.indexOf(a), ib = priorityOrder.indexOf(b);
+      if (ia === -1 && ib === -1) return a.localeCompare(b);
+      if (ia === -1) return 1;
+      if (ib === -1) return -1;
+      return ia - ib;
+    });
 
   const hasRevenue = kpiKeys.includes(revenueBaseKey);
   const hasGP = kpiKeys.includes("Gross Profit");
@@ -770,6 +1326,14 @@ function fmtCrAlready(v) {
 function fmtRupee(v) {
   if (v === null || v === undefined || typeof v !== "number" || Number.isNaN(v)) return "N/A";
   return `₹${Math.round(v).toLocaleString("en-IN")}`;
+}
+// Same per-unit rupee value as fmtRupee, but scaled to thousands — used where
+// the label itself says "(in Thousands)" (e.g. Vitra's ARPU), so the cell
+// isn't showing a 4-5 digit rupee figure the label has already told the
+// reader to read in '000s.
+function fmtRupeeThousands(v) {
+  if (v === null || v === undefined || typeof v !== "number" || Number.isNaN(v)) return "N/A";
+  return `₹${(v / 1000).toLocaleString("en-IN", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}`;
 }
 
 /* ============================================================
@@ -1599,6 +2163,373 @@ function MultiplKPITable({ ds }) {
                 })}
               </tr>
             ))}
+          </tbody>
+        </table>
+      </div>
+      {unmatched.length > 0 && (
+        <div className="fin-table__foot-note">
+          <Info size={12} style={{ flexShrink: 0, position: "relative", top: 1 }} />
+          No row matching {unmatched.map(r => `"${r.label}"`).join(" or ")} was found in this workbook — shown as N/A
+          rather than a guessed figure.
+        </div>
+      )}
+    </section>
+  );
+}
+
+/* ============================================================
+   FASTSURANCE KEY PERFORMANCE INDICATORS — the reference layout's
+   insurance-operations metrics (Total Registrations, Total
+   Resolved Cases, Resolved Case Value, % Resolved). Same flat
+   value-row shape as MultiplKPITable, matched semantically against
+   ds.companyConfig.kpi.rows. As of the current standardized MIS,
+   none of these four concepts have a matching row in the sheet
+   (it currently carries only the financial P&L, no case-management
+   data) — every cell therefore renders N/A with a footnote, which
+   is the correct, honest behaviour per spec rather than a reason
+   to omit the table. The day a registrations/resolved-case row is
+   added to the sheet, this table picks it up with no code change.
+   ============================================================ */
+function FastsuranceKPITable({ ds }) {
+  const [mode, setMode] = useState("quarterly");
+  const cfg = ds.companyConfig.kpi;
+  if (!cfg || !cfg.rows) return null;
+  const periods = periodsFor(ds, mode);
+  const quarterly = mode === "quarterly";
+
+  const rows = cfg.rows.map(r => ({
+    ...r,
+    matchedKey: ds.kpiKeys.find(k => r.matchers.some(re => re.test(k))) || null,
+  }));
+  const unmatched = rows.filter(r => !r.matchedKey && !ds.companyConfig.fallbackKPIs?.[r.slug]);
+
+  return (
+    <section className="section">
+      <div className="fin-section__head">
+        <div className="section__title">Key Performance Indicators</div>
+        <PeriodToggle mode={mode} onChange={setMode} />
+      </div>
+      <div className="fin-table-wrap fin-table-wrap--kpi">
+        <table className="fin-table fin-table--kpi">
+          <thead>
+            <tr>
+              <th className="fin-table__label-col">KPI</th>
+              {periods.map(p => (
+                <th key={p.key}>
+                  {p.label.replace(" (partial)", "")}
+                  {quarterly
+                    ? (!p.complete ? <span className="fin-table__partial"> (partial)</span> : "")
+                    : (p.partial ? <span className="fin-table__partial"> (partial)</span> : "")}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map(row => (
+              <tr key={row.label}>
+                <td className="fin-table__label-col">{row.label}</td>
+                {periods.map(p => {
+                  const raw = row.matchedKey ? p[row.matchedKey] : null;
+                  const val = withFallback(ds.companyConfig, row.slug, p.key, raw);
+                  return <td key={p.key}>{row.fmt(val)}</td>;
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {unmatched.length > 0 && (
+        <div className="fin-table__foot-note">
+          <Info size={12} style={{ flexShrink: 0, position: "relative", top: 1 }} />
+          No row matching {unmatched.map(r => `"${r.label}"`).join(" or ")} was found in this workbook — shown as N/A
+          rather than a guessed figure. This standardized MIS currently carries financial (P&amp;L) data only; add a
+          registrations/resolved-case tracker to the sheet to unlock these.
+        </div>
+      )}
+    </section>
+  );
+}
+
+/* ============================================================
+   VITRA (APEX FUTURE LABS) KEY PERFORMANCE INDICATORS — No. of
+   Customers (a point-in-time count, read as the last value in the
+   period — see stockRowMatchers) and ARPU (a per-customer average,
+   not summed — see rupeeAvgRowMatchers). Same flat value-row shape
+   as MultiplKPITable/FastsuranceKPITable. See the note on
+   COMPANY_CONFIGS.apexFutureLabs — the currently-provided
+   standardized workbook for this company has no usable row labels
+   at all (a data-integrity issue in that file, not this dashboard),
+   so both rows render N/A until a corrected file is uploaded.
+   ============================================================ */
+function ApexFutureLabsKPITable({ ds }) {
+  const [mode, setMode] = useState("quarterly");
+  const cfg = ds.companyConfig.kpi;
+  if (!cfg || !cfg.rows) return null;
+  const periods = periodsFor(ds, mode);
+  const quarterly = mode === "quarterly";
+
+  const rows = cfg.rows.map(r => ({
+    ...r,
+    matchedKey: ds.kpiKeys.find(k => r.matchers.some(re => re.test(k))) || null,
+  }));
+  const unmatched = rows.filter(r => !r.matchedKey && !ds.companyConfig.fallbackKPIs?.[r.slug]);
+
+  return (
+    <section className="section">
+      <div className="fin-section__head">
+        <div className="section__title">Key Performance Indicators</div>
+        <PeriodToggle mode={mode} onChange={setMode} />
+      </div>
+      <div className="fin-table-wrap fin-table-wrap--kpi">
+        <table className="fin-table fin-table--kpi">
+          <thead>
+            <tr>
+              <th className="fin-table__label-col">KPI</th>
+              {periods.map(p => (
+                <th key={p.key}>
+                  {p.label.replace(" (partial)", "")}
+                  {quarterly
+                    ? (!p.complete ? <span className="fin-table__partial"> (partial)</span> : "")
+                    : (p.partial ? <span className="fin-table__partial"> (partial)</span> : "")}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map(row => (
+              <tr key={row.label}>
+                <td className="fin-table__label-col">{row.label}</td>
+                {periods.map(p => {
+                  const raw = row.matchedKey ? p[row.matchedKey] : null;
+                  const val = withFallback(ds.companyConfig, row.slug, p.key, raw);
+                  return <td key={p.key}>{row.fmt(val)}</td>;
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {unmatched.length > 0 && (
+        <div className="fin-table__foot-note">
+          <Info size={12} style={{ flexShrink: 0, position: "relative", top: 1 }} />
+          No row matching {unmatched.map(r => `"${r.label}"`).join(" or ")} was found in this workbook — shown as N/A
+          rather than a guessed figure.
+        </div>
+      )}
+    </section>
+  );
+}
+
+/* ============================================================
+   FINBOX KEY PERFORMANCE INDICATORS — Embedded Finance % / Device
+   Connect % / Bank Connect % / Bureau Connect % / MarketX-Sentinel
+   %, per the reference layout. None of these exist as rows in the
+   standardized MIS today (confirmed against all 30 rows) — every
+   cell renders N/A with the footnote below rather than a guessed
+   figure. Same flat value-row shape as MultiplKPITable/
+   FastsuranceKPITable/ApexFutureLabsKPITable.
+   ============================================================ */
+function FinboxKPITable({ ds }) {
+  const [mode, setMode] = useState("quarterly");
+  const cfg = ds.companyConfig.kpi;
+  if (!cfg || !cfg.rows) return null;
+  const periods = periodsFor(ds, mode);
+  const quarterly = mode === "quarterly";
+
+  const rows = cfg.rows.map(r => ({
+    ...r,
+    matchedKey: ds.kpiKeys.find(k => r.matchers.some(re => re.test(k))) || null,
+  }));
+  const unmatched = rows.filter(r => !r.matchedKey && !ds.companyConfig.fallbackKPIs?.[r.slug]);
+
+  return (
+    <section className="section">
+      <div className="fin-section__head">
+        <div className="section__title">Key Performance Indicators</div>
+        <PeriodToggle mode={mode} onChange={setMode} />
+      </div>
+      <div className="fin-table-wrap fin-table-wrap--kpi">
+        <table className="fin-table fin-table--kpi">
+          <thead>
+            <tr>
+              <th className="fin-table__label-col">KPI</th>
+              {periods.map(p => (
+                <th key={p.key}>
+                  {p.label.replace(" (partial)", "")}
+                  {quarterly
+                    ? (!p.complete ? <span className="fin-table__partial"> (partial)</span> : "")
+                    : (p.partial ? <span className="fin-table__partial"> (partial)</span> : "")}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map(row => (
+              <tr key={row.label}>
+                <td className="fin-table__label-col">{row.label}</td>
+                {periods.map(p => {
+                  const raw = row.matchedKey ? p[row.matchedKey] : null;
+                  const val = withFallback(ds.companyConfig, row.slug, p.key, raw);
+                  return <td key={p.key}>{row.fmt(val)}</td>;
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {unmatched.length > 0 && (
+        <div className="fin-table__foot-note">
+          <Info size={12} style={{ flexShrink: 0, position: "relative", top: 1 }} />
+          No row matching {unmatched.map(r => `"${r.label}"`).join(", ")} was found in this workbook — this
+          standardized MIS currently carries financial (revenue/cost/EBITDA) data only, so these operational mix
+          metrics are shown as N/A above rather than estimated.
+        </div>
+      )}
+    </section>
+  );
+}
+
+/* ============================================================
+   FUNDAMENTO KEY PERFORMANCE INDICATORS — Cumulative Pulses, read
+   as the last value in the period (see stockRowMatchers: the
+   source counter resets every April, so the FY-end/Q4-end reading
+   is exactly the full-year pulse count). Same flat value-row shape
+   as the other single/few-KPI companies.
+   ============================================================ */
+function FundamentoKPITable({ ds }) {
+  const [mode, setMode] = useState("quarterly");
+  const cfg = ds.companyConfig.kpi;
+  if (!cfg || !cfg.rows) return null;
+  const periods = periodsFor(ds, mode);
+  const quarterly = mode === "quarterly";
+
+  const rows = cfg.rows.map(r => ({
+    ...r,
+    matchedKey: ds.kpiKeys.find(k => r.matchers.some(re => re.test(k))) || null,
+  }));
+  const unmatched = rows.filter(r => !r.matchedKey && !ds.companyConfig.fallbackKPIs?.[r.slug]);
+
+  return (
+    <section className="section">
+      <div className="fin-section__head">
+        <div className="section__title">Key Performance Indicators</div>
+        <PeriodToggle mode={mode} onChange={setMode} />
+      </div>
+      <div className="fin-table-wrap fin-table-wrap--kpi">
+        <table className="fin-table fin-table--kpi">
+          <thead>
+            <tr>
+              <th className="fin-table__label-col">KPI</th>
+              {periods.map(p => (
+                <th key={p.key}>
+                  {p.label.replace(" (partial)", "")}
+                  {quarterly
+                    ? (!p.complete ? <span className="fin-table__partial"> (partial)</span> : "")
+                    : (p.partial ? <span className="fin-table__partial"> (partial)</span> : "")}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map(row => (
+              <tr key={row.label}>
+                <td className="fin-table__label-col">{row.label}</td>
+                {periods.map(p => {
+                  const raw = row.matchedKey ? p[row.matchedKey] : null;
+                  const val = withFallback(ds.companyConfig, row.slug, p.key, raw);
+                  return <td key={p.key}>{row.fmt(val)}</td>;
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {unmatched.length > 0 && (
+        <div className="fin-table__foot-note">
+          <Info size={12} style={{ flexShrink: 0, position: "relative", top: 1 }} />
+          No row matching {unmatched.map(r => `"${r.label}"`).join(" or ")} was found in this workbook — shown as N/A
+          rather than a guessed figure.
+        </div>
+      )}
+    </section>
+  );
+}
+
+/* ============================================================
+   LEEGALITY KEY PERFORMANCE INDICATORS — combines Riskcovry's
+   value+YoY-growth row shape (for e-signs and stamps, both period
+   flow counts) with one plain stock row (subscription accounts, a
+   point-in-time snapshot with no growth row in the reference
+   layout). Growth reuses the same periodGrowth() helper as every
+   other company's table — sequential FY-over-FY yearly, comparable
+   quarter one FY back quarterly.
+   ============================================================ */
+function LeegalityKPITable({ ds }) {
+  const [mode, setMode] = useState("quarterly");
+  const cfg = ds.companyConfig.kpi;
+  if (!cfg || !cfg.rows) return null;
+  const periods = periodsFor(ds, mode);
+  const quarterly = mode === "quarterly";
+
+  const rows = cfg.rows.map(r => ({
+    ...r,
+    matchedKey: ds.kpiKeys.find(k => r.matchers.some(re => re.test(k))) || null,
+  }));
+  const stockRow = cfg.stockRow ? { ...cfg.stockRow, matchedKey: ds.kpiKeys.find(k => cfg.stockRow.matchers.some(re => re.test(k))) || null } : null;
+  const unmatched = [...rows, ...(stockRow ? [stockRow] : [])].filter(r => !r.matchedKey && !ds.companyConfig.fallbackKPIs?.[r.slug]);
+
+  return (
+    <section className="section">
+      <div className="fin-section__head">
+        <div className="section__title">Key Performance Indicators</div>
+        <PeriodToggle mode={mode} onChange={setMode} />
+      </div>
+      <div className="fin-table-wrap fin-table-wrap--kpi">
+        <table className="fin-table fin-table--kpi">
+          <thead>
+            <tr>
+              <th className="fin-table__label-col">KPI</th>
+              {periods.map(p => (
+                <th key={p.key}>
+                  {p.label.replace(" (partial)", "")}
+                  {quarterly
+                    ? (!p.complete ? <span className="fin-table__partial"> (partial)</span> : "")
+                    : (p.partial ? <span className="fin-table__partial"> (partial)</span> : "")}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map(row => (
+              <React.Fragment key={row.label}>
+                <tr>
+                  <td className="fin-table__label-col">{row.label}</td>
+                  {periods.map(p => {
+                    const raw = row.matchedKey ? p[row.matchedKey] : null;
+                    const val = withFallback(ds.companyConfig, row.slug, p.key, raw);
+                    return <td key={p.key}>{fmtNum(val)}</td>;
+                  })}
+                </tr>
+                <tr>
+                  <td className="fin-table__label-col">Growth YoY</td>
+                  {periods.map((p, i) => {
+                    const g = row.matchedKey ? periodGrowth(periods, i, row.matchedKey, quarterly) : null;
+                    const val = withFallback(ds.companyConfig, row.growthSlug, p.key, g);
+                    return <td key={p.key}><GrowthBadge value={val} /></td>;
+                  })}
+                </tr>
+              </React.Fragment>
+            ))}
+            {stockRow && (
+              <tr>
+                <td className="fin-table__label-col">{stockRow.label}</td>
+                {periods.map(p => {
+                  const raw = stockRow.matchedKey ? p[stockRow.matchedKey] : null;
+                  const val = withFallback(ds.companyConfig, stockRow.slug, p.key, raw);
+                  return <td key={p.key}>{fmtNum(val)}</td>;
+                })}
+              </tr>
+            )}
           </tbody>
         </table>
       </div>
@@ -2787,6 +3718,573 @@ function MultiplCommentary({ ds }) {
   );
 }
 
+/* ============================================================
+   FASTSURANCE (INSURANCE SAMADHAN) PERFORMANCE COMMENTARY —
+   revenue and EBITDA trend (same methodology as every other
+   company's commentary), plus an operational-KPI bullet that
+   reports registrations/resolved-cases/% resolved when the sheet
+   has them and says plainly that it doesn't when it currently
+   doesn't (this MIS is financial-P&amp;L-only today) — never a
+   qualitative claim standing in for a missing number.
+   ============================================================ */
+function FastsuranceCommentary({ ds }) {
+  const { latestQ, prevYearQ, latestFY, prevFY } = getExecStats(ds);
+  const revKey = ds.revenueBaseKey;
+  const kpiCfg = ds.companyConfig.kpi;
+
+  const revYoY = latestQ && prevYearQ && typeof latestQ[revKey] === "number" && typeof prevYearQ[revKey] === "number" && prevYearQ[revKey]
+    ? ((latestQ[revKey] - prevYearQ[revKey]) / Math.abs(prevYearQ[revKey])) * 100 : null;
+
+  const ebitdaCurr = latestFY && typeof latestFY["EBITDA"] === "number" ? latestFY["EBITDA"] : null;
+  const ebitdaPrev = prevFY && typeof prevFY["EBITDA"] === "number" ? prevFY["EBITDA"] : null;
+  const ebitdaTrend = describeEbitdaTrend(ebitdaCurr, ebitdaPrev);
+
+  const marginPick = bestMarginKey(ds);
+  const marginFYIdx = latestFY ? ds.fyData.findIndex(f => f.key === latestFY.key) : -1;
+  const marginPrevFY = marginFYIdx > 0 ? ds.fyData[marginFYIdx - 1] : null;
+  const marginCurr = marginPick && latestFY ? latestFY[marginPick[0]] : null;
+  const marginPrev = marginPick && marginPrevFY ? marginPrevFY[marginPick[0]] : null;
+
+  const opRows = (kpiCfg?.rows || []).map(r => ({ ...r, matchedKey: ds.kpiKeys.find(k => r.matchers.some(re => re.test(k))) || null }));
+  const opAvailable = opRows.filter(r => r.matchedKey);
+  const pctResolvedRow = opRows.find(r => r.slug === "pctResolved");
+  const pctResolvedCurr = pctResolvedRow?.matchedKey && latestFY && typeof latestFY[pctResolvedRow.matchedKey] === "number" ? latestFY[pctResolvedRow.matchedKey] : null;
+
+  return (
+    <section className="section narrative-section">
+      <div className="section__title">Performance Commentary</div>
+      <div className="narrative-grid">
+        <div className="narrative-card">
+          <div className="narrative-card__eyebrow">Revenue &amp; profitability</div>
+          <div className="narrative-bullets">
+            <div className="narrative-bullet">
+              <span className="narrative-bullet__icon"><TrendingUp size={15} /></span>
+              <span>
+                {latestQ && prevYearQ && revYoY !== null ? (
+                  <><strong>{latestQ.label}</strong> closed with {(ds.revenueLabel || "net revenue").toLowerCase()} of{" "}
+                  <strong>{fmtCr(latestQ[revKey])}</strong>, {revYoY >= 0 ? "up" : "down"} {Math.abs(revYoY).toFixed(1)}% versus{" "}
+                  {fmtCr(prevYearQ[revKey])} in {prevYearQ.label}.</>
+                ) : (
+                  <>{ds.revenueLabel || "Revenue"} data isn't complete enough yet to compute a like-for-like quarterly YoY comparison.</>
+                )}
+              </span>
+            </div>
+            <div className="narrative-bullet">
+              <span className="narrative-bullet__icon"><Rocket size={15} /></span>
+              <span>
+                {latestFY && prevFY && ebitdaTrend ? (
+                  <>FY EBITDA {ebitdaTrend} from <strong>{fmtCr(ebitdaPrev)}</strong> in {prevFY.label} to{" "}
+                  <strong>{fmtCr(ebitdaCurr)}</strong> in {latestFY.label}
+                  {marginPick && typeof marginCurr === "number" ? <>, with {marginPick[0].toLowerCase()} at <strong>{fmtPct(marginCurr)}</strong>
+                  {typeof marginPrev === "number" ? <> versus {fmtPct(marginPrev)} the prior FY</> : ""}</> : ""}.</>
+                ) : (
+                  <>Not enough complete fiscal years of EBITDA yet to describe a trend.</>
+                )}
+              </span>
+            </div>
+            <div className="narrative-bullet">
+              <span className="narrative-bullet__icon"><ShieldCheck size={15} /></span>
+              <span>
+                {opAvailable.length ? (
+                  <>{opAvailable.map((r, i) => (
+                    <React.Fragment key={r.label}>
+                      {i > 0 ? "; " : ""}<strong>{r.label}</strong> stood at <strong>{r.fmt(latestFY?.[r.matchedKey])}</strong> in {latestFY?.label}
+                    </React.Fragment>
+                  ))}.</>
+                ) : (
+                  <>This standardized MIS currently carries financial (P&amp;L) data only — case-level operating metrics
+                  (registrations, resolved cases, resolution rate) aren't present in the uploaded sheet yet, so they're
+                  shown as N/A above rather than estimated.</>
+                )}
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <div className="narrative-stat-col">
+          <div className="stat-tile">
+            <div className="stat-tile__label">Latest quarter vs prior year</div>
+            <div className="stat-tile__value">{latestQ ? fmtCr(latestQ[revKey]) : "N/A"}</div>
+            <div className="stat-tile__sub">
+              {latestQ ? latestQ.label : "—"} {(ds.revenueLabel || "revenue").toLowerCase()} {revYoY !== null && <Delta curr={latestQ?.[revKey]} prev={prevYearQ?.[revKey]} good="up" />}
+            </div>
+          </div>
+          <div className="stat-tile">
+            <div className="stat-tile__label">FY EBITDA</div>
+            <div className="stat-tile__value">{latestFY ? fmtCr(latestFY["EBITDA"]) : "N/A"}</div>
+            <div className="stat-tile__sub">
+              {latestFY ? `${latestFY.label}${ebitdaTrend ? `, ${ebitdaTrend} from ${fmtCr(ebitdaPrev)} prior FY` : ""}` : "—"}
+            </div>
+          </div>
+          <div className="stat-tile">
+            <div className="stat-tile__label">% Resolved</div>
+            <div className="stat-tile__value">{typeof pctResolvedCurr === "number" ? fmtPct(pctResolvedCurr) : "N/A"}</div>
+            <div className="stat-tile__sub">{latestFY ? latestFY.label : "—"}</div>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+/* ============================================================
+   VITRA (APEX FUTURE LABS) PERFORMANCE COMMENTARY — same
+   revenue/EBITDA-margin methodology as every other company, plus a
+   Customers/ARPU bullet. See the note on COMPANY_CONFIGS.
+   apexFutureLabs: the currently-provided standardized workbook has
+   no usable row labels, so every figure below renders as "not
+   enough data yet" until a corrected file is uploaded — this
+   component is otherwise fully generic and will narrate real
+   numbers the moment the sheet's labels are fixed.
+   ============================================================ */
+function VitraCommentary({ ds }) {
+  const { latestQ, prevYearQ, latestFY, prevFY } = getExecStats(ds);
+  const revKey = ds.revenueBaseKey;
+  const kpiCfg = ds.companyConfig.kpi;
+
+  const revYoY = latestQ && prevYearQ && typeof latestQ[revKey] === "number" && typeof prevYearQ[revKey] === "number" && prevYearQ[revKey]
+    ? ((latestQ[revKey] - prevYearQ[revKey]) / Math.abs(prevYearQ[revKey])) * 100 : null;
+
+  const ebitdaCurr = latestFY && typeof latestFY["EBITDA"] === "number" ? latestFY["EBITDA"] : null;
+  const ebitdaPrev = prevFY && typeof prevFY["EBITDA"] === "number" ? prevFY["EBITDA"] : null;
+  const ebitdaTrend = describeEbitdaTrend(ebitdaCurr, ebitdaPrev);
+
+  const marginPick = bestMarginKey(ds);
+  const marginCurr = marginPick && latestFY ? latestFY[marginPick[0]] : null;
+  const marginPrevFY = latestFY ? ds.fyData[ds.fyData.findIndex(f => f.key === latestFY.key) - 1] : null;
+  const marginPrev = marginPick && marginPrevFY ? marginPrevFY[marginPick[0]] : null;
+
+  const custKey = ds.kpiKeys.find(k => (kpiCfg?.rows || []).find(r => r.slug === "customers")?.matchers.some(re => re.test(k))) || null;
+  const arpuKey = ds.kpiKeys.find(k => (kpiCfg?.rows || []).find(r => r.slug === "arpu")?.matchers.some(re => re.test(k))) || null;
+  const custCurr = custKey && latestFY && typeof latestFY[custKey] === "number" ? latestFY[custKey] : null;
+  const custPrev = custKey && prevFY && typeof prevFY[custKey] === "number" ? prevFY[custKey] : null;
+  const arpuCurr = arpuKey && latestFY && typeof latestFY[arpuKey] === "number" ? latestFY[arpuKey] : null;
+
+  return (
+    <section className="section narrative-section">
+      <div className="section__title">Performance Commentary</div>
+      <div className="narrative-grid">
+        <div className="narrative-card">
+          <div className="narrative-card__eyebrow">Revenue &amp; profitability</div>
+          <div className="narrative-bullets">
+            <div className="narrative-bullet">
+              <span className="narrative-bullet__icon"><TrendingUp size={15} /></span>
+              <span>
+                {latestQ && prevYearQ && revYoY !== null ? (
+                  <><strong>{latestQ.label}</strong> closed with {(ds.revenueLabel || "net revenue").toLowerCase()} of{" "}
+                  <strong>{fmtCr(latestQ[revKey])}</strong>, {revYoY >= 0 ? "up" : "down"} {Math.abs(revYoY).toFixed(1)}% versus{" "}
+                  {fmtCr(prevYearQ[revKey])} in {prevYearQ.label}.</>
+                ) : (
+                  <>{ds.revenueLabel || "Revenue"} data isn't complete enough yet to compute a like-for-like quarterly YoY comparison.</>
+                )}
+              </span>
+            </div>
+            <div className="narrative-bullet">
+              <span className="narrative-bullet__icon"><Rocket size={15} /></span>
+              <span>
+                {latestFY && prevFY && ebitdaTrend ? (
+                  <>FY EBITDA {ebitdaTrend} from <strong>{fmtCr(ebitdaPrev)}</strong> in {prevFY.label} to{" "}
+                  <strong>{fmtCr(ebitdaCurr)}</strong> in {latestFY.label}
+                  {marginPick && typeof marginCurr === "number" ? <>, with {marginPick[0].toLowerCase()} at <strong>{fmtPct(marginCurr)}</strong>
+                  {typeof marginPrev === "number" ? <> versus {fmtPct(marginPrev)} the prior FY</> : ""}</> : ""}.</>
+                ) : (
+                  <>Not enough complete fiscal years of EBITDA yet to describe a trend.</>
+                )}
+              </span>
+            </div>
+            <div className="narrative-bullet">
+              <span className="narrative-bullet__icon"><Users size={15} /></span>
+              <span>
+                {typeof custCurr === "number" ? (
+                  <>Customers stood at <strong>{fmtNum(custCurr)}</strong> as of {latestFY?.label}
+                  {typeof custPrev === "number" ? <>, versus {fmtNum(custPrev)} the prior FY-end</> : ""}
+                  {typeof arpuCurr === "number" ? <>, with ARPU (in thousands) of <strong>{fmtRupeeThousands(arpuCurr)}</strong></> : ""}.</>
+                ) : (
+                  <>Customer count and ARPU aren't available yet for this workbook — add rows for these to the sheet
+                  (matched by name or common synonym) to unlock this.</>
+                )}
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <div className="narrative-stat-col">
+          <div className="stat-tile">
+            <div className="stat-tile__label">Latest quarter vs prior year</div>
+            <div className="stat-tile__value">{latestQ ? fmtCr(latestQ[revKey]) : "N/A"}</div>
+            <div className="stat-tile__sub">
+              {latestQ ? latestQ.label : "—"} {(ds.revenueLabel || "revenue").toLowerCase()} {revYoY !== null && <Delta curr={latestQ?.[revKey]} prev={prevYearQ?.[revKey]} good="up" />}
+            </div>
+          </div>
+          <div className="stat-tile">
+            <div className="stat-tile__label">FY EBITDA</div>
+            <div className="stat-tile__value">{latestFY ? fmtCr(latestFY["EBITDA"]) : "N/A"}</div>
+            <div className="stat-tile__sub">
+              {latestFY ? `${latestFY.label}${ebitdaTrend ? `, ${ebitdaTrend} from ${fmtCr(ebitdaPrev)} prior FY` : ""}` : "—"}
+            </div>
+          </div>
+          <div className="stat-tile">
+            <div className="stat-tile__label">Customers</div>
+            <div className="stat-tile__value">{typeof custCurr === "number" ? fmtNum(custCurr) : "N/A"}</div>
+            <div className="stat-tile__sub">{latestFY ? latestFY.label : "—"}</div>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+/* ============================================================
+   FINBOX PERFORMANCE COMMENTARY — revenue growth and gross-margin
+   evolution, EBITDA trajectory (merged two-vintage figure — see
+   keyAliases on COMPANY_CONFIGS.finbox), a real product-mix bullet
+   (One-time vs Recurring revenue split, computed from the sheet's
+   own "-One time Revenue"/"-Recurring Revenue" rows where
+   populated), and an explicit N/A callout for the embedded-finance
+   mix KPIs the reference layout asks for but this MIS doesn't carry.
+   ============================================================ */
+function FinboxCommentary({ ds }) {
+  const { latestQ, prevYearQ, latestFY, prevFY } = getExecStats(ds);
+  const revKey = ds.revenueBaseKey;
+  const kpiCfg = ds.companyConfig.kpi;
+
+  const revYoY = latestQ && prevYearQ && typeof latestQ[revKey] === "number" && typeof prevYearQ[revKey] === "number" && prevYearQ[revKey]
+    ? ((latestQ[revKey] - prevYearQ[revKey]) / Math.abs(prevYearQ[revKey])) * 100 : null;
+
+  const ebitdaCurr = latestFY && typeof latestFY["EBITDA"] === "number" ? latestFY["EBITDA"] : null;
+  const ebitdaPrev = prevFY && typeof prevFY["EBITDA"] === "number" ? prevFY["EBITDA"] : null;
+  const ebitdaTrend = describeEbitdaTrend(ebitdaCurr, ebitdaPrev);
+
+  const gmCurr = latestFY && typeof latestFY["Gross Margin"] === "number" ? latestFY["Gross Margin"] : null;
+  const gmPrev = prevFY && typeof prevFY["Gross Margin"] === "number" ? prevFY["Gross Margin"] : null;
+
+  const oneTimeKey = ds.kpiKeys.find(k => /^-One time Revenue$/i.test(k)) || null;
+  const recurringKey = ds.kpiKeys.find(k => /^-Recurring Revenue$/i.test(k)) || null;
+  const recurringCurr = recurringKey && latestFY && typeof latestFY[recurringKey] === "number" ? latestFY[recurringKey] : null;
+  const revCurr = latestFY && typeof latestFY[revKey] === "number" ? latestFY[revKey] : null;
+  const recurringShare = (typeof recurringCurr === "number" && typeof revCurr === "number" && revCurr) ? recurringCurr / revCurr : null;
+
+  const opRows = (kpiCfg?.rows || []).map(r => ({ ...r, matchedKey: ds.kpiKeys.find(k => r.matchers.some(re => re.test(k))) || null }));
+  const opAvailable = opRows.filter(r => r.matchedKey);
+
+  return (
+    <section className="section narrative-section">
+      <div className="section__title">Performance Commentary</div>
+      <div className="narrative-grid">
+        <div className="narrative-card">
+          <div className="narrative-card__eyebrow">Revenue &amp; profitability</div>
+          <div className="narrative-bullets">
+            <div className="narrative-bullet">
+              <span className="narrative-bullet__icon"><TrendingUp size={15} /></span>
+              <span>
+                {latestQ && prevYearQ && revYoY !== null ? (
+                  <><strong>{latestQ.label}</strong> closed with {(ds.revenueLabel || "net revenue").toLowerCase()} of{" "}
+                  <strong>{fmtCr(latestQ[revKey])}</strong>, {revYoY >= 0 ? "up" : "down"} {Math.abs(revYoY).toFixed(1)}% versus{" "}
+                  {fmtCr(prevYearQ[revKey])} in {prevYearQ.label}
+                  {typeof gmCurr === "number" ? <>, with gross margin at <strong>{fmtPct(gmCurr)}</strong>
+                  {typeof gmPrev === "number" ? <> versus {fmtPct(gmPrev)} the prior FY</> : ""}</> : ""}.</>
+                ) : (
+                  <>{ds.revenueLabel || "Revenue"} data isn't complete enough yet to compute a like-for-like quarterly YoY comparison.</>
+                )}
+              </span>
+            </div>
+            <div className="narrative-bullet">
+              <span className="narrative-bullet__icon"><Rocket size={15} /></span>
+              <span>
+                {latestFY && prevFY && ebitdaTrend ? (
+                  <>FY EBITDA {ebitdaTrend} from <strong>{fmtCr(ebitdaPrev)}</strong> in {prevFY.label} to{" "}
+                  <strong>{fmtCr(ebitdaCurr)}</strong> in {latestFY.label} (merging the sheet's two MIS vintages,
+                  latest/revised source preferred for overlapping months, per its own Read Me).</>
+                ) : (
+                  <>Not enough complete fiscal years of EBITDA yet to describe a trend.</>
+                )}
+              </span>
+            </div>
+            <div className="narrative-bullet">
+              <span className="narrative-bullet__icon"><Target size={15} /></span>
+              <span>
+                {typeof recurringShare === "number" ? (
+                  <>Recurring revenue made up <strong>{fmtPct(recurringShare)}</strong> of {(ds.revenueLabel || "revenue").toLowerCase()}{" "}
+                  in {latestFY?.label}, the balance one-time/project revenue. </>
+                ) : (
+                  <>Revenue-mix (recurring vs one-time) data isn't populated for the latest FY yet. </>
+                )}
+                {opAvailable.length ? (
+                  <>{opAvailable.map((r, i) => (
+                    <React.Fragment key={r.label}>{i > 0 ? "; " : ""}<strong>{r.label}</strong> stood at{" "}
+                    <strong>{r.fmt(latestFY?.[r.matchedKey])}</strong> in {latestFY?.label}</React.Fragment>
+                  ))}.</>
+                ) : (
+                  <>Embedded-finance product-mix metrics (Embedded Finance %, Device Connect %, Bank Connect %, Bureau
+                  Connect %, MarketX/Sentinel %) aren't present in the uploaded standardized MIS — shown as N/A above
+                  rather than estimated.</>
+                )}
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <div className="narrative-stat-col">
+          <div className="stat-tile">
+            <div className="stat-tile__label">Latest quarter vs prior year</div>
+            <div className="stat-tile__value">{latestQ ? fmtCr(latestQ[revKey]) : "N/A"}</div>
+            <div className="stat-tile__sub">
+              {latestQ ? latestQ.label : "—"} {(ds.revenueLabel || "revenue").toLowerCase()} {revYoY !== null && <Delta curr={latestQ?.[revKey]} prev={prevYearQ?.[revKey]} good="up" />}
+            </div>
+          </div>
+          <div className="stat-tile">
+            <div className="stat-tile__label">FY EBITDA</div>
+            <div className="stat-tile__value">{latestFY ? fmtCr(latestFY["EBITDA"]) : "N/A"}</div>
+            <div className="stat-tile__sub">
+              {latestFY ? `${latestFY.label}${ebitdaTrend ? `, ${ebitdaTrend} from ${fmtCr(ebitdaPrev)} prior FY` : ""}` : "—"}
+            </div>
+          </div>
+          <div className="stat-tile">
+            <div className="stat-tile__label">Gross Margin</div>
+            <div className="stat-tile__value">{typeof gmCurr === "number" ? fmtPct(gmCurr) : "N/A"}</div>
+            <div className="stat-tile__sub">{latestFY ? latestFY.label : "—"}</div>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+/* ============================================================
+   FUNDAMENTO PERFORMANCE COMMENTARY — pulse growth (Cumulative
+   Pulses), revenue growth, EBITDA trajectory, and an operating-
+   leverage bullet computed from real per-pulse economics (cost per
+   pulse vs revenue per pulse) since this MIS has no distinct Gross
+   Profit line (see companyConfig note: EBITDA = Total Revenue −
+   Total Cost exactly, so "Gross Margin" isn't a separable figure
+   here and is never shown as a guessed duplicate of EBITDA).
+   ============================================================ */
+function FundamentoCommentary({ ds }) {
+  const { latestQ, prevYearQ, latestFY, prevFY } = getExecStats(ds);
+  const revKey = ds.revenueBaseKey;
+
+  const revYoY = latestQ && prevYearQ && typeof latestQ[revKey] === "number" && typeof prevYearQ[revKey] === "number" && prevYearQ[revKey]
+    ? ((latestQ[revKey] - prevYearQ[revKey]) / Math.abs(prevYearQ[revKey])) * 100 : null;
+
+  const ebitdaCurr = latestFY && typeof latestFY["EBITDA"] === "number" ? latestFY["EBITDA"] : null;
+  const ebitdaPrev = prevFY && typeof prevFY["EBITDA"] === "number" ? prevFY["EBITDA"] : null;
+  const ebitdaTrend = describeEbitdaTrend(ebitdaCurr, ebitdaPrev);
+  const ebitdaMarginCurr = latestFY && typeof latestFY["EBITDA Margin"] === "number" ? latestFY["EBITDA Margin"] : null;
+  const ebitdaMarginPrev = prevFY && typeof prevFY["EBITDA Margin"] === "number" ? prevFY["EBITDA Margin"] : null;
+
+  const pulsesKey = ds.kpiKeys.find(k => /cum+ulative\s*pulses/i.test(k)) || null;
+  const pulsesCurr = pulsesKey && latestFY && typeof latestFY[pulsesKey] === "number" ? latestFY[pulsesKey] : null;
+  const pulsesPrev = pulsesKey && prevFY && typeof prevFY[pulsesKey] === "number" ? prevFY[pulsesKey] : null;
+  const pulsesGrowth = (typeof pulsesCurr === "number" && typeof pulsesPrev === "number" && pulsesPrev)
+    ? ((pulsesCurr - pulsesPrev) / Math.abs(pulsesPrev)) * 100 : null;
+
+  const rppKey = ds.kpiKeys.find(k => /^revenue\s*per\s*pulse$/i.test(k)) || null;
+  const rppCurr = rppKey && latestFY && typeof latestFY[rppKey] === "number" ? latestFY[rppKey] : null;
+  const rppPrev = rppKey && prevFY && typeof prevFY[rppKey] === "number" ? prevFY[rppKey] : null;
+  const totalCostCurr = latestFY && typeof latestFY["Total Cost"] === "number" ? latestFY["Total Cost"] : null;
+  const costPerPulseCurr = (typeof totalCostCurr === "number" && typeof pulsesCurr === "number" && pulsesCurr)
+    ? totalCostCurr / pulsesCurr : null;
+  const totalCostPrev = prevFY && typeof prevFY["Total Cost"] === "number" ? prevFY["Total Cost"] : null;
+  const costPerPulsePrev = (typeof totalCostPrev === "number" && typeof pulsesPrev === "number" && pulsesPrev)
+    ? totalCostPrev / pulsesPrev : null;
+
+  return (
+    <section className="section narrative-section">
+      <div className="section__title">Performance Commentary</div>
+      <div className="narrative-grid">
+        <div className="narrative-card">
+          <div className="narrative-card__eyebrow">Revenue &amp; profitability</div>
+          <div className="narrative-bullets">
+            <div className="narrative-bullet">
+              <span className="narrative-bullet__icon"><TrendingUp size={15} /></span>
+              <span>
+                {latestQ && prevYearQ && revYoY !== null ? (
+                  <><strong>{latestQ.label}</strong> closed with {(ds.revenueLabel || "revenue").toLowerCase()} of{" "}
+                  <strong>{fmtCr(latestQ[revKey])}</strong>, {revYoY >= 0 ? "up" : "down"} {Math.abs(revYoY).toFixed(1)}% versus{" "}
+                  {fmtCr(prevYearQ[revKey])} in {prevYearQ.label}.</>
+                ) : (
+                  <>{ds.revenueLabel || "Revenue"} data isn't complete enough yet to compute a like-for-like quarterly YoY comparison.</>
+                )}
+              </span>
+            </div>
+            <div className="narrative-bullet">
+              <span className="narrative-bullet__icon"><Rocket size={15} /></span>
+              <span>
+                {typeof pulsesCurr === "number" ? (
+                  <>Cumulative Pulses {pulsesGrowth !== null ? <>{pulsesGrowth >= 0 ? "grew" : "declined"} <strong>{Math.abs(pulsesGrowth).toFixed(1)}%</strong> YoY to</> : "reached"}{" "}
+                  <strong>{fmtNum(pulsesCurr)}</strong> in {latestFY?.label}
+                  {typeof pulsesPrev === "number" ? <>, from {fmtNum(pulsesPrev)} in {prevFY?.label}</> : ""}
+                  {typeof rppCurr === "number" ? <>, at a realised revenue of <strong>{fmtRupee(rppCurr)}</strong> per pulse
+                  {typeof rppPrev === "number" ? <> (versus {fmtRupee(rppPrev)} the prior FY)</> : ""}</> : ""}.</>
+                ) : (
+                  <>Pulse-volume data isn't complete enough yet to compute a YoY comparison.</>
+                )}
+              </span>
+            </div>
+            <div className="narrative-bullet">
+              <span className="narrative-bullet__icon"><ShieldCheck size={15} /></span>
+              <span>
+                {latestFY && prevFY && ebitdaTrend ? (
+                  <>FY EBITDA {ebitdaTrend} from <strong>{fmtCr(ebitdaPrev)}</strong> in {prevFY.label} to{" "}
+                  <strong>{fmtCr(ebitdaCurr)}</strong> in {latestFY.label}
+                  {typeof ebitdaMarginCurr === "number" ? <>, EBITDA margin at <strong>{fmtPct(ebitdaMarginCurr)}</strong>
+                  {typeof ebitdaMarginPrev === "number" ? <> versus {fmtPct(ebitdaMarginPrev)} prior FY</> : ""}</> : ""}
+                  {(typeof costPerPulseCurr === "number" && typeof costPerPulsePrev === "number") ? <>. Cost per pulse
+                  {costPerPulseCurr < costPerPulsePrev ? " declined" : costPerPulseCurr > costPerPulsePrev ? " rose" : " held steady"} to{" "}
+                  <strong>{fmtRupee(costPerPulseCurr)}</strong> from {fmtRupee(costPerPulsePrev)} the prior FY — the clearest read on operating
+                  leverage this MIS supports (it carries Total Revenue, Total Cost and EBITDA only, with no separate
+                  Gross Profit line, so Gross Margin is intentionally not shown as a distinct metric)</> : ""}.</>
+                ) : (
+                  <>Not enough complete fiscal years of EBITDA yet to describe a trend.</>
+                )}
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <div className="narrative-stat-col">
+          <div className="stat-tile">
+            <div className="stat-tile__label">Latest quarter vs prior year</div>
+            <div className="stat-tile__value">{latestQ ? fmtCr(latestQ[revKey]) : "N/A"}</div>
+            <div className="stat-tile__sub">
+              {latestQ ? latestQ.label : "—"} {(ds.revenueLabel || "revenue").toLowerCase()} {revYoY !== null && <Delta curr={latestQ?.[revKey]} prev={prevYearQ?.[revKey]} good="up" />}
+            </div>
+          </div>
+          <div className="stat-tile">
+            <div className="stat-tile__label">FY EBITDA</div>
+            <div className="stat-tile__value">{latestFY ? fmtCr(latestFY["EBITDA"]) : "N/A"}</div>
+            <div className="stat-tile__sub">
+              {latestFY ? `${latestFY.label}${ebitdaTrend ? `, ${ebitdaTrend} from ${fmtCr(ebitdaPrev)} prior FY` : ""}` : "—"}
+            </div>
+          </div>
+          <div className="stat-tile">
+            <div className="stat-tile__label">Cumulative Pulses</div>
+            <div className="stat-tile__value">{typeof pulsesCurr === "number" ? fmtNum(pulsesCurr) : "N/A"}</div>
+            <div className="stat-tile__sub">{latestFY ? `${latestFY.label}${pulsesGrowth !== null ? `, ${pulsesGrowth >= 0 ? "+" : ""}${pulsesGrowth.toFixed(1)}% YoY` : ""}` : "—"}</div>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+/* ============================================================
+   LEEGALITY PERFORMANCE COMMENTARY — revenue/EBITDA-margin
+   methodology as every other company, plus an eSign/stamp/
+   subscription-accounts bullet layered in per the spec.
+   ============================================================ */
+function LeegalityCommentary({ ds }) {
+  const { latestQ, prevYearQ, latestFY, prevFY } = getExecStats(ds);
+  const revKey = ds.revenueBaseKey;
+  const kpiCfg = ds.companyConfig.kpi;
+
+  const revYoY = latestQ && prevYearQ && typeof latestQ[revKey] === "number" && typeof prevYearQ[revKey] === "number" && prevYearQ[revKey]
+    ? ((latestQ[revKey] - prevYearQ[revKey]) / Math.abs(prevYearQ[revKey])) * 100 : null;
+
+  const ebitdaCurr = latestFY && typeof latestFY["EBITDA"] === "number" ? latestFY["EBITDA"] : null;
+  const ebitdaPrev = prevFY && typeof prevFY["EBITDA"] === "number" ? prevFY["EBITDA"] : null;
+  const ebitdaTrend = describeEbitdaTrend(ebitdaCurr, ebitdaPrev);
+
+  const marginPick = bestMarginKey(ds);
+  const marginFYIdx = latestFY ? ds.fyData.findIndex(f => f.key === latestFY.key) : -1;
+  const marginPrevFY = marginFYIdx > 0 ? ds.fyData[marginFYIdx - 1] : null;
+  const marginCurr = marginPick && latestFY ? latestFY[marginPick[0]] : null;
+  const marginPrev = marginPick && marginPrevFY ? marginPrevFY[marginPick[0]] : null;
+
+  const esignRow = (kpiCfg?.rows || []).find(r => r.slug === "esigns");
+  const stampRow = (kpiCfg?.rows || []).find(r => r.slug === "stamps");
+  const esignKey = esignRow ? ds.kpiKeys.find(k => esignRow.matchers.some(re => re.test(k))) : null;
+  const stampKey = stampRow ? ds.kpiKeys.find(k => stampRow.matchers.some(re => re.test(k))) : null;
+  const subKey = kpiCfg?.stockRow ? ds.kpiKeys.find(k => kpiCfg.stockRow.matchers.some(re => re.test(k))) : null;
+
+  const esignGrowthIdx = ds.qData.length - 1;
+  const esignGrowth = esignKey ? periodGrowth(ds.qData, esignGrowthIdx, esignKey, true) : null;
+  const stampGrowth = stampKey ? periodGrowth(ds.qData, esignGrowthIdx, stampKey, true) : null;
+  const latestQEsign = esignKey && latestQ ? latestQ[esignKey] : null;
+  const latestQStamp = stampKey && latestQ ? latestQ[stampKey] : null;
+  const subCurr = subKey && latestQ && typeof latestQ[subKey] === "number" ? latestQ[subKey] : null;
+
+  return (
+    <section className="section narrative-section">
+      <div className="section__title">Performance Commentary</div>
+      <div className="narrative-grid">
+        <div className="narrative-card">
+          <div className="narrative-card__eyebrow">Growth &amp; profitability</div>
+          <div className="narrative-bullets">
+            <div className="narrative-bullet">
+              <span className="narrative-bullet__icon"><TrendingUp size={15} /></span>
+              <span>
+                {latestQ && prevYearQ && revYoY !== null ? (
+                  <><strong>{latestQ.label}</strong> closed with {(ds.revenueLabel || "net revenue").toLowerCase()} of{" "}
+                  <strong>{fmtCr(latestQ[revKey])}</strong>, {revYoY >= 0 ? "up" : "down"} {Math.abs(revYoY).toFixed(1)}% versus{" "}
+                  {fmtCr(prevYearQ[revKey])} in {prevYearQ.label}.</>
+                ) : (
+                  <>{ds.revenueLabel || "Revenue"} data isn't complete enough yet to compute a like-for-like quarterly YoY comparison.</>
+                )}
+              </span>
+            </div>
+            <div className="narrative-bullet">
+              <span className="narrative-bullet__icon"><Rocket size={15} /></span>
+              <span>
+                {latestFY && prevFY && ebitdaTrend ? (
+                  <>FY EBITDA {ebitdaTrend} from <strong>{fmtCr(ebitdaPrev)}</strong> in {prevFY.label} to{" "}
+                  <strong>{fmtCr(ebitdaCurr)}</strong> in {latestFY.label}
+                  {marginPick && typeof marginCurr === "number" ? <>, with {marginPick[0].toLowerCase()} at <strong>{fmtPct(marginCurr)}</strong>
+                  {typeof marginPrev === "number" ? <> versus {fmtPct(marginPrev)} the prior FY</> : ""}</> : ""}.</>
+                ) : (
+                  <>Not enough complete fiscal years of EBITDA yet to describe a trend.</>
+                )}
+              </span>
+            </div>
+            <div className="narrative-bullet">
+              <span className="narrative-bullet__icon"><Layers size={15} /></span>
+              <span>
+                {(typeof latestQEsign === "number" || typeof latestQStamp === "number" || typeof subCurr === "number") ? (
+                  <>
+                    {typeof latestQEsign === "number" && (
+                      <>{latestQ.label} logged <strong>{fmtNum(latestQEsign)}</strong> eSigns
+                      {esignGrowth !== null ? <> ({esignGrowth >= 0 ? "+" : ""}{(esignGrowth * 100).toFixed(1)}% YoY)</> : ""}. </>
+                    )}
+                    {typeof latestQStamp === "number" && (
+                      <><strong>{fmtNum(latestQStamp)}</strong> stamps were ordered
+                      {stampGrowth !== null ? <> ({stampGrowth >= 0 ? "+" : ""}{(stampGrowth * 100).toFixed(1)}% YoY)</> : ""}. </>
+                    )}
+                    {typeof subCurr === "number" && <>Active subscription accounts stood at <strong>{fmtNum(subCurr)}</strong> as of {latestQ.label}.</>}
+                  </>
+                ) : (
+                  <>eSign / stamp / subscription-account data isn't complete enough yet for this period.</>
+                )}
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <div className="narrative-stat-col">
+          <div className="stat-tile">
+            <div className="stat-tile__label">Latest quarter vs prior year</div>
+            <div className="stat-tile__value">{latestQ ? fmtCr(latestQ[revKey]) : "N/A"}</div>
+            <div className="stat-tile__sub">
+              {latestQ ? latestQ.label : "—"} {(ds.revenueLabel || "revenue").toLowerCase()} {revYoY !== null && <Delta curr={latestQ?.[revKey]} prev={prevYearQ?.[revKey]} good="up" />}
+            </div>
+          </div>
+          <div className="stat-tile">
+            <div className="stat-tile__label">FY EBITDA</div>
+            <div className="stat-tile__value">{latestFY ? fmtCr(latestFY["EBITDA"]) : "N/A"}</div>
+            <div className="stat-tile__sub">
+              {latestFY ? `${latestFY.label}${ebitdaTrend ? `, ${ebitdaTrend} from ${fmtCr(ebitdaPrev)} prior FY` : ""}` : "—"}
+            </div>
+          </div>
+          <div className="stat-tile">
+            <div className="stat-tile__label">No. of e-signs</div>
+            <div className="stat-tile__value">{typeof latestQEsign === "number" ? fmtNum(latestQEsign) : "N/A"}</div>
+            <div className="stat-tile__sub">{latestQ ? latestQ.label : "—"}</div>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 const CHIP_ICONS = [Layers, ShieldCheck, Target, Info];
 const SCALE_ICONS = [Building2, Store, Users];
 
@@ -2991,6 +4489,36 @@ export default function App() {
               <MultiplKPITable ds={dataset} />
               <RevenueProfitabilityTable ds={dataset} title="Key Financial Highlights" />
               <MultiplCommentary ds={dataset} />
+            </>
+          ) : dataset.companyConfig.layout === "fastsurance" ? (
+            <>
+              <RevenueProfitabilityTable ds={dataset} title="Key Financial Highlights" />
+              <FastsuranceCommentary ds={dataset} />
+              <FastsuranceKPITable ds={dataset} />
+            </>
+          ) : dataset.companyConfig.layout === "apexFutureLabs" ? (
+            <>
+              <ApexFutureLabsKPITable ds={dataset} />
+              <RevenueProfitabilityTable ds={dataset} title="Key Financial Highlights" />
+              <VitraCommentary ds={dataset} />
+            </>
+          ) : dataset.companyConfig.layout === "leegality" ? (
+            <>
+              <LeegalityKPITable ds={dataset} />
+              <RevenueProfitabilityTable ds={dataset} title="Key Financial Highlights" />
+              <LeegalityCommentary ds={dataset} />
+            </>
+          ) : dataset.companyConfig.layout === "finbox" ? (
+            <>
+              <RevenueProfitabilityTable ds={dataset} title="Key Financial Highlights" />
+              <FinboxCommentary ds={dataset} />
+              <FinboxKPITable ds={dataset} />
+            </>
+          ) : dataset.companyConfig.layout === "fundamento" ? (
+            <>
+              <FundamentoKPITable ds={dataset} />
+              <RevenueProfitabilityTable ds={dataset} title="Key Financial Highlights" />
+              <FundamentoCommentary ds={dataset} />
             </>
           ) : (
             <>
