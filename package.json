@@ -1,13 +1,20 @@
 {
+  "type": "module",
   "dependencies": {
+    "@supabase/supabase-js": "^2.45.0",
+    "formidable": "^3.5.1",
     "lucide-react": "^1.31.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
     "recharts": "^3.10.1",
     "xlsx": "^0.18.5"
   },
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "seed": "node scripts/seed.mjs",
+    "parity-check": "node scripts/parity_check.mjs"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^6.0.5",

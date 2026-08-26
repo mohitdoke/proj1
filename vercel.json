@@ -1,0 +1,12 @@
+{
+  "buildCommand": "npm run build",
+  "outputDirectory": "dist",
+  "functions": {
+    "api/admin/mis/upload.js": {
+      "maxDuration": 30
+    },
+    "api/companies/[companyId]/research.js": {
+      "maxDuration": 20
+    }
+  }
+}
