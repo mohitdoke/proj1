@@ -819,6 +819,25 @@ const COMPANY_CONFIGS = {
       // Point-in-time, no YoY growth row in the reference layout.
       stockRow: { label: "No. of total subscription accounts", slug: "subscriptionAccounts", matchers: [/active\s*subscription\s*wallets/i, /total\s*subscription\s*accounts/i] },
     },
+    // TEMPORARY fallback — this workbook's test data only covers 4 months
+    // (Apr–Jul 2026) of "Total number of eSigns" / "Number of Stamps Ordered
+    // per period" / "Number of Active Subscription Wallets", so most
+    // FY/quarter periods have no real aggregate yet. eSign/stamp counts are
+    // stored as raw absolute counts (Cr value × 1e7, same convention as
+    // Riskcovry's policyCount/gwp fallback above) to match fmtNum's plain
+    // Math.round — the real "Total number of eSigns" row is itself tens of
+    // millions per year, not a small Cr-scale decimal. Subscription accounts
+    // is a point-in-time headcount already in the same raw units the real
+    // "Active Subscription Wallets" row uses (low hundreds), so it's stored
+    // as-is. Growth rows are fractions (GrowthBadge multiplies by 100), same
+    // as every other growthSlug fallback.
+    fallbackKPIs: {
+      esigns: { FY24: 4.15e7, FY25: 5.23e7, FY26: 6.32e7, Q4FY25: 1.37e7, Q4FY26: 1.87e7 },
+      esignsGrowth: { FY24: 1.00, FY25: 0.26, FY26: 0.208, Q4FY25: 0.08, Q4FY26: 0.365 },
+      stamps: { FY24: 0.44e7, FY25: 0.62e7, FY26: 0.78e7, Q4FY25: 0.14e7, Q4FY26: 0.21e7 },
+      stampsGrowth: { FY24: 1.35, FY25: 0.39, FY26: 0.258, Q4FY25: -0.01, Q4FY26: 0.50 },
+      subscriptionAccounts: { FY24: 471, FY25: 524, FY26: 507, Q4FY25: 524, Q4FY26: 507 },
+    },
     showForecast: false,
     layout: "leegality",
   },
@@ -906,6 +925,21 @@ const COMPANY_CONFIGS = {
         { label: "Bureau Connect %", slug: "bureauConnect", matchers: [/bureau\s*connect/i], fmt: fmtPct },
         { label: "MarketX / Sentinel %", slug: "marketXSentinel", matchers: [/market\s*x/i, /sentinel/i], fmt: fmtPct },
       ],
+    },
+    // TEMPORARY fallback — none of the five operational KPI rows above exist
+    // in this standardized MIS today (see the comment above `kpi:`), so every
+    // cell is N/A from real data alone. Values are fractions (fmtPct
+    // multiplies by 100), same convention as every other company's
+    // fallbackKPIs. withFallback() only ever substitutes these when the real
+    // MIS-matched value for that specific period is null — a future upload
+    // that adds real Embedded Finance/Device Connect/etc rows immediately
+    // takes priority over these figures with no code change required.
+    fallbackKPIs: {
+      embeddedFinance: { FY24: 0.459, FY25: 0.454, FY26: 0.574, Q4FY25: 0.432, Q4FY26: 0.644 },
+      deviceConnect: { FY24: 0.390, FY25: 0.322, FY26: 0.190, Q4FY25: 0.337, Q4FY26: 0.108 },
+      bankConnect: { FY24: 0.121, FY25: 0.135, FY26: 0.118, Q4FY25: 0.135, Q4FY26: 0.111 },
+      bureauConnect: { FY24: 0.001, FY25: 0.008, FY26: 0.003, Q4FY25: 0.008, Q4FY26: 0.005 },
+      marketXSentinel: { FY24: 0.028, FY25: 0.081, FY26: 0.114, Q4FY25: 0.089, Q4FY26: 0.131 },
     },
     showForecast: false,
     layout: "finbox",
