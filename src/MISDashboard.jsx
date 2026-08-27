@@ -1,4 +1,5 @@
-import React, { useState, useMemo, useCallback, useEffect } from "react";
+import React, { useState, useMemo, useCallback, useEffect, useRef } from "react";
+import { motion, AnimatePresence } from "framer-motion";
 import {
   LineChart, Line, BarChart, Bar, ComposedChart, Cell, ReferenceLine,
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend
@@ -42,6 +43,64 @@ import {
   guessNewsCategory,
 } from "./lib/misEngine.js";
 
+/* ============================================================
+   Reveal — thin motion.section wrapper used in place of every plain
+   <section> in this file (mechanically swapped in below). Fades +
+   lifts a section into place the first time it scrolls into view;
+   `once:true` means it never re-triggers on scroll-back, so tables/
+   charts underneath never get yanked around mid-read. Framer Motion
+   itself already no-ops big transforms under prefers-reduced-motion
+   at the browser level via its `useReducedMotion`-aware defaults, and
+   GlobalStyles' own reduced-motion query collapses any leftover CSS
+   transition/animation durations to ~0 as a second safety net.
+   ============================================================ */
+function Reveal({ className = "", children, ...rest }) {
+  return (
+    <motion.section
+      className={className}
+      initial={{ opacity: 0, y: 22 }}
+      whileInView={{ opacity: 1, y: 0 }}
+      viewport={{ once: true, margin: "-60px" }}
+      transition={{ duration: 0.5, ease: [0.2, 0.65, 0.3, 1] }}
+      {...rest}
+    >
+      {children}
+    </motion.section>
+  );
+}
+
+/* Small requestAnimationFrame-driven ease-out counter: interpolates from the
+   previous rendered value to the new target whenever `target` changes, so
+   KPI card values animate rather than snapping — purely presentational,
+   `fmt` (the same formatter already used everywhere else) still owns the
+   actual displayed text at every frame, so this can never show a number
+   that formatting logic didn't produce. */
+function useAnimatedNumber(target, duration = 700) {
+  const [display, setDisplay] = useState(target);
+  const fromRef = useRef(target);
+  const rafRef = useRef(null);
+
+  useEffect(() => {
+    if (typeof target !== "number" || Number.isNaN(target)) { setDisplay(target); fromRef.current = target; return; }
+    const from = typeof fromRef.current === "number" && !Number.isNaN(fromRef.current) ? fromRef.current : target;
+    if (from === target) { setDisplay(target); return; }
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) { setDisplay(target); fromRef.current = target; return; }
+    const start = performance.now();
+    cancelAnimationFrame(rafRef.current);
+    function tick(now) {
+      const t = Math.min(1, (now - start) / duration);
+      const eased = 1 - Math.pow(1 - t, 3); // easeOutCubic
+      setDisplay(from + (target - from) * eased);
+      if (t < 1) rafRef.current = requestAnimationFrame(tick);
+      else fromRef.current = target;
+    }
+    rafRef.current = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(rafRef.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [target]);
+
+  return display;
+}
 
 function GrowthBadge({ value }) {
   if (value === null || value === undefined || Number.isNaN(value)) {
@@ -149,28 +208,35 @@ function monthlySeriesFor(ds, cfg, fyIdxs) {
   });
 }
 
-function KpiCard({ cfg, ds, fyIndex, expanded, onToggle }) {
+function KpiCard({ cfg, ds, fyIndex, expanded, onToggle, index = 0 }) {
   const fy = ds.fyData[fyIndex];
   const curr = fy[cfg.key];
   const prev = fyIndex > 0 ? ds.fyData[fyIndex - 1][cfg.key] : null;
   const sparkData = ds.fyData.map(f => ({ v: f[cfg.key] }));
   const isOpen = expanded === cfg.key;
+  const animatedCurr = useAnimatedNumber(typeof curr === "number" ? curr : null);
 
   return (
-    <button
+    <motion.button
       className={`kpi-card ${cfg.primary ? "kpi-card--primary" : ""} ${isOpen ? "kpi-card--active" : ""}`}
       onClick={() => onToggle(cfg.key)}
+      initial={{ opacity: 0, y: 16 }}
+      whileInView={{ opacity: 1, y: 0 }}
+      viewport={{ once: true, margin: "-40px" }}
+      transition={{ duration: 0.35, delay: Math.min(index, 8) * 0.05, ease: "easeOut" }}
+      whileHover={{ y: -3 }}
+      whileTap={{ scale: 0.98 }}
     >
       <div className="kpi-card__top">
         <span className="kpi-card__label">{cfg.label}</span>
         <ChevronDown size={16} className="kpi-card__chev" />
       </div>
-      <div className="kpi-card__value">{cfg.fmt(curr)}</div>
+      <div className="kpi-card__value">{cfg.fmt(typeof curr === "number" ? animatedCurr : curr)}</div>
       <div className="kpi-card__foot">
         <Delta curr={curr} prev={prev} good={cfg.good} />
-        <span className="kpi-card__spark"><MiniSpark data={sparkData} dataKey="v" color="#1D4E4A" /></span>
+        <span className="kpi-card__spark"><MiniSpark data={sparkData} dataKey="v" color="#2DD4BF" /></span>
       </div>
-    </button>
+    </motion.button>
   );
 }
 
@@ -189,8 +255,22 @@ function DrillDownModal({ cfg, ds, fyIndex, onClose }) {
   const isPct = cfg.isMargin;
 
   return (
-    <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal-panel" onClick={(e) => e.stopPropagation()}>
+    <motion.div
+      className="modal-backdrop"
+      onClick={onClose}
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.18 }}
+    >
+      <motion.div
+        className="modal-panel"
+        onClick={(e) => e.stopPropagation()}
+        initial={{ opacity: 0, scale: 0.95, y: 10 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.96, y: 8 }}
+        transition={{ duration: 0.22, ease: [0.2, 0.9, 0.3, 1] }}
+      >
         <div className="modal-panel__header">
           <div>
             <div className="modal-panel__eyebrow">{fy.label} · {fy.sub}</div>
@@ -225,16 +305,16 @@ function DrillDownModal({ cfg, ds, fyIndex, onClose }) {
         <div className="drawer-subhead" style={{ marginTop: 20 }}>Monthly trend — {fy.label} ({fy.sub})</div>
         <ResponsiveContainer width="100%" height={180}>
           <LineChart data={monthly} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#EEF0F3" vertical={false} />
-            <XAxis dataKey="month" tick={{ fontSize: 10, fill: "#8891A3", fontFamily: "IBM Plex Mono" }} axisLine={{ stroke: "#E5E7EB" }} tickLine={false} />
-            <YAxis tick={{ fontSize: 10, fill: "#8891A3", fontFamily: "IBM Plex Mono" }} axisLine={false} tickLine={false}
+            <CartesianGrid strokeDasharray="3 3" stroke="#1E2433" vertical={false} />
+            <XAxis dataKey="month" tick={{ fontSize: 10, fill: "#96A0BE", fontFamily: "IBM Plex Mono" }} axisLine={{ stroke: "#2A3142" }} tickLine={false} />
+            <YAxis tick={{ fontSize: 10, fill: "#96A0BE", fontFamily: "IBM Plex Mono" }} axisLine={false} tickLine={false}
               tickFormatter={(v) => isPct ? `${(v * 100).toFixed(0)}%` : cfg.isHeadcount ? v : fmtCr(v)} width={isPct ? 34 : 56} />
-            <Tooltip formatter={(v) => cfg.fmt(v)} contentStyle={{ fontFamily: "IBM Plex Mono", fontSize: 12, border: "1px solid #E5E7EB", borderRadius: 8 }} />
-            <Line type="monotone" dataKey="value" stroke="#B08A3E" strokeWidth={2} dot={{ r: 2.5, fill: "#B08A3E" }} isAnimationActive={false} />
+            <Tooltip formatter={(v) => cfg.fmt(v)} contentStyle={{ fontFamily: "IBM Plex Mono", fontSize: 12, border: "1px solid #2A3142", borderRadius: 8, background: "#0D1220", color: "#EAF0FA", boxShadow: "0 12px 32px -12px rgba(0,0,0,0.6)" }} />
+            <Line type="monotone" dataKey="value" stroke="#F5B759" strokeWidth={2} dot={{ r: 2.5, fill: "#F5B759" }} isAnimationActive={false} />
           </LineChart>
         </ResponsiveContainer>
-      </div>
-    </div>
+      </motion.div>
+    </motion.div>
   );
 }
 
@@ -244,11 +324,11 @@ function RevenueTrendChart({ ds }) {
   return (
     <ResponsiveContainer width="100%" height={230}>
       <LineChart data={data} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
-        <CartesianGrid strokeDasharray="3 3" stroke="#EEF0F3" vertical={false} />
-        <XAxis dataKey="month" tick={{ fontSize: 9, fill: "#8891A3", fontFamily: "IBM Plex Mono" }} interval={Math.max(0, Math.floor(data.length / 16))} axisLine={{ stroke: "#E5E7EB" }} tickLine={false} />
-        <YAxis tick={{ fontSize: 10, fill: "#8891A3", fontFamily: "IBM Plex Mono" }} axisLine={false} tickLine={false} tickFormatter={fmtCr} width={62} />
-        <Tooltip formatter={(v) => fmtCr(v)} contentStyle={{ fontFamily: "IBM Plex Mono", fontSize: 12, border: "1px solid #E5E7EB", borderRadius: 8 }} />
-        <Line type="monotone" dataKey="revenue" stroke="#1D4E4A" strokeWidth={2} dot={false} isAnimationActive={false} />
+        <CartesianGrid strokeDasharray="3 3" stroke="#1E2433" vertical={false} />
+        <XAxis dataKey="month" tick={{ fontSize: 9, fill: "#96A0BE", fontFamily: "IBM Plex Mono" }} interval={Math.max(0, Math.floor(data.length / 16))} axisLine={{ stroke: "#2A3142" }} tickLine={false} />
+        <YAxis tick={{ fontSize: 10, fill: "#96A0BE", fontFamily: "IBM Plex Mono" }} axisLine={false} tickLine={false} tickFormatter={fmtCr} width={62} />
+        <Tooltip formatter={(v) => fmtCr(v)} contentStyle={{ fontFamily: "IBM Plex Mono", fontSize: 12, border: "1px solid #2A3142", borderRadius: 8, background: "#0D1220", color: "#EAF0FA", boxShadow: "0 12px 32px -12px rgba(0,0,0,0.6)" }} />
+        <Line type="monotone" dataKey="revenue" stroke="#2DD4BF" strokeWidth={2} dot={false} isAnimationActive={false} />
       </LineChart>
     </ResponsiveContainer>
   );
@@ -259,7 +339,7 @@ function RevenueMixChart({ ds }) {
     ? ds.kpiKeys.filter(k => ds.pnlRevenueSubLines.some(re => re.test(k)))
     : ds.kpiKeys.filter(k => /revenue/i.test(k) && k !== ds.revenueBaseKey);
   if (!revenueLines.length) return <div className="chart-empty">No revenue sub-lines to break down — only "{ds.revenueLabel}" is present.</div>;
-  const colors = ["#1D4E4A", "#B08A3E", "#7C9885", "#8B95F2", "#B3492F"];
+  const colors = ["#2DD4BF", "#F5B759", "#38BDF8", "#A78BFA", "#FB7185"];
   const data = ds.fyData.map(f => {
     const row = { fy: f.label };
     revenueLines.forEach(k => { row[k] = f[k]; });
@@ -268,11 +348,11 @@ function RevenueMixChart({ ds }) {
   return (
     <ResponsiveContainer width="100%" height={230}>
       <BarChart data={data} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
-        <CartesianGrid strokeDasharray="3 3" stroke="#EEF0F3" vertical={false} />
-        <XAxis dataKey="fy" tick={{ fontSize: 10, fill: "#8891A3", fontFamily: "IBM Plex Mono" }} axisLine={{ stroke: "#E5E7EB" }} tickLine={false} />
-        <YAxis tick={{ fontSize: 10, fill: "#8891A3", fontFamily: "IBM Plex Mono" }} axisLine={false} tickLine={false} tickFormatter={fmtCr} width={62} />
-        <Tooltip formatter={(v) => fmtCr(v)} contentStyle={{ fontFamily: "IBM Plex Mono", fontSize: 12, border: "1px solid #E5E7EB", borderRadius: 8 }} />
-        <Legend wrapperStyle={{ fontFamily: "Inter", fontSize: 11 }} />
+        <CartesianGrid strokeDasharray="3 3" stroke="#1E2433" vertical={false} />
+        <XAxis dataKey="fy" tick={{ fontSize: 10, fill: "#96A0BE", fontFamily: "IBM Plex Mono" }} axisLine={{ stroke: "#2A3142" }} tickLine={false} />
+        <YAxis tick={{ fontSize: 10, fill: "#96A0BE", fontFamily: "IBM Plex Mono" }} axisLine={false} tickLine={false} tickFormatter={fmtCr} width={62} />
+        <Tooltip formatter={(v) => fmtCr(v)} contentStyle={{ fontFamily: "IBM Plex Mono", fontSize: 12, border: "1px solid #2A3142", borderRadius: 8, background: "#0D1220", color: "#EAF0FA", boxShadow: "0 12px 32px -12px rgba(0,0,0,0.6)" }} />
+        <Legend wrapperStyle={{ fontFamily: "Inter", fontSize: 11, color: "#96A0BE" }} />
         {revenueLines.map((k, i) => <Bar key={k} dataKey={k} stackId="a" fill={colors[i % colors.length]} radius={i === revenueLines.length - 1 ? [3, 3, 0, 0] : [0, 0, 0, 0]} />)}
       </BarChart>
     </ResponsiveContainer>
@@ -285,14 +365,14 @@ function ProfitabilityChart({ ds }) {
   return (
     <ResponsiveContainer width="100%" height={230}>
       <ComposedChart data={data} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
-        <CartesianGrid strokeDasharray="3 3" stroke="#EEF0F3" vertical={false} />
-        <XAxis dataKey="fy" tick={{ fontSize: 10, fill: "#8891A3", fontFamily: "IBM Plex Mono" }} axisLine={{ stroke: "#E5E7EB" }} tickLine={false} />
-        <YAxis tick={{ fontSize: 10, fill: "#8891A3", fontFamily: "IBM Plex Mono" }} axisLine={false} tickLine={false} tickFormatter={fmtCr} width={62} />
-        <Tooltip formatter={(v) => fmtCr(v)} contentStyle={{ fontFamily: "IBM Plex Mono", fontSize: 12, border: "1px solid #E5E7EB", borderRadius: 8 }} />
-        <Legend wrapperStyle={{ fontFamily: "Inter", fontSize: 11 }} />
-        <Bar dataKey="Revenue" fill="#E8E4DA" radius={[3, 3, 0, 0]} />
-        {ds.hasEBITDA && <Line type="monotone" dataKey="EBITDA" stroke="#B08A3E" strokeWidth={2} dot={{ r: 3 }} />}
-        {ds.hasNet && <Line type="monotone" dataKey="Net Profit" stroke="#B3492F" strokeWidth={2} dot={{ r: 3 }} />}
+        <CartesianGrid strokeDasharray="3 3" stroke="#1E2433" vertical={false} />
+        <XAxis dataKey="fy" tick={{ fontSize: 10, fill: "#96A0BE", fontFamily: "IBM Plex Mono" }} axisLine={{ stroke: "#2A3142" }} tickLine={false} />
+        <YAxis tick={{ fontSize: 10, fill: "#96A0BE", fontFamily: "IBM Plex Mono" }} axisLine={false} tickLine={false} tickFormatter={fmtCr} width={62} />
+        <Tooltip formatter={(v) => fmtCr(v)} contentStyle={{ fontFamily: "IBM Plex Mono", fontSize: 12, border: "1px solid #2A3142", borderRadius: 8, background: "#0D1220", color: "#EAF0FA", boxShadow: "0 12px 32px -12px rgba(0,0,0,0.6)" }} />
+        <Legend wrapperStyle={{ fontFamily: "Inter", fontSize: 11, color: "#96A0BE" }} />
+        <Bar dataKey="Revenue" fill="#333B4F" radius={[3, 3, 0, 0]} />
+        {ds.hasEBITDA && <Line type="monotone" dataKey="EBITDA" stroke="#F5B759" strokeWidth={2} dot={{ r: 3 }} />}
+        {ds.hasNet && <Line type="monotone" dataKey="Net Profit" stroke="#FB7185" strokeWidth={2} dot={{ r: 3 }} />}
       </ComposedChart>
     </ResponsiveContainer>
   );
@@ -300,9 +380,9 @@ function ProfitabilityChart({ ds }) {
 
 function MarginTrendChart({ ds }) {
   const lines = [];
-  if (ds.hasRevenue && ds.hasGP) lines.push(["Gross Margin", "#1D4E4A"]);
-  if (ds.hasRevenue && ds.hasEBITDA) lines.push(["EBITDA Margin", "#B08A3E"]);
-  if (ds.hasRevenue && ds.hasNet) lines.push(["Net Margin", "#B3492F"]);
+  if (ds.hasRevenue && ds.hasGP) lines.push(["Gross Margin", "#2DD4BF"]);
+  if (ds.hasRevenue && ds.hasEBITDA) lines.push(["EBITDA Margin", "#F5B759"]);
+  if (ds.hasRevenue && ds.hasNet) lines.push(["Net Margin", "#FB7185"]);
   if (!lines.length) return <div className="chart-empty">Need Total Revenue plus at least one of Gross Profit / EBITDA / Net Profit to compute margins.</div>;
   const data = ds.fyData.map(f => {
     const row = { fy: f.label };
@@ -312,11 +392,11 @@ function MarginTrendChart({ ds }) {
   return (
     <ResponsiveContainer width="100%" height={230}>
       <LineChart data={data} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
-        <CartesianGrid strokeDasharray="3 3" stroke="#EEF0F3" vertical={false} />
-        <XAxis dataKey="fy" tick={{ fontSize: 10, fill: "#8891A3", fontFamily: "IBM Plex Mono" }} axisLine={{ stroke: "#E5E7EB" }} tickLine={false} />
-        <YAxis tick={{ fontSize: 10, fill: "#8891A3", fontFamily: "IBM Plex Mono" }} axisLine={false} tickLine={false} tickFormatter={(v) => `${(v * 100).toFixed(0)}%`} width={46} />
-        <Tooltip formatter={(v) => fmtPct(v)} contentStyle={{ fontFamily: "IBM Plex Mono", fontSize: 12, border: "1px solid #E5E7EB", borderRadius: 8 }} />
-        <Legend wrapperStyle={{ fontFamily: "Inter", fontSize: 11 }} />
+        <CartesianGrid strokeDasharray="3 3" stroke="#1E2433" vertical={false} />
+        <XAxis dataKey="fy" tick={{ fontSize: 10, fill: "#96A0BE", fontFamily: "IBM Plex Mono" }} axisLine={{ stroke: "#2A3142" }} tickLine={false} />
+        <YAxis tick={{ fontSize: 10, fill: "#96A0BE", fontFamily: "IBM Plex Mono" }} axisLine={false} tickLine={false} tickFormatter={(v) => `${(v * 100).toFixed(0)}%`} width={46} />
+        <Tooltip formatter={(v) => fmtPct(v)} contentStyle={{ fontFamily: "IBM Plex Mono", fontSize: 12, border: "1px solid #2A3142", borderRadius: 8, background: "#0D1220", color: "#EAF0FA", boxShadow: "0 12px 32px -12px rgba(0,0,0,0.6)" }} />
+        <Legend wrapperStyle={{ fontFamily: "Inter", fontSize: 11, color: "#96A0BE" }} />
         {lines.map(([k, c]) => <Line key={k} type="monotone" dataKey={k} stroke={c} strokeWidth={2} dot={{ r: 3 }} />)}
       </LineChart>
     </ResponsiveContainer>
@@ -329,14 +409,14 @@ function HeadcountChart({ ds }) {
   return (
     <ResponsiveContainer width="100%" height={230}>
       <ComposedChart data={data} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
-        <CartesianGrid strokeDasharray="3 3" stroke="#EEF0F3" vertical={false} />
-        <XAxis dataKey="fy" tick={{ fontSize: 10, fill: "#8891A3", fontFamily: "IBM Plex Mono" }} axisLine={{ stroke: "#E5E7EB" }} tickLine={false} />
-        <YAxis yAxisId="left" tick={{ fontSize: 10, fill: "#8891A3", fontFamily: "IBM Plex Mono" }} axisLine={false} tickLine={false} width={36} />
-        <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 10, fill: "#8891A3", fontFamily: "IBM Plex Mono" }} axisLine={false} tickLine={false} width={46} tickFormatter={(v) => `₹${v.toFixed(0)}L`} />
-        <Tooltip formatter={(v, n) => n === "Rev/Employee" ? `₹${v.toFixed(1)} L` : Math.round(v)} contentStyle={{ fontFamily: "IBM Plex Mono", fontSize: 12, border: "1px solid #E5E7EB", borderRadius: 8 }} />
-        <Legend wrapperStyle={{ fontFamily: "Inter", fontSize: 11 }} />
-        <Bar yAxisId="left" dataKey="Headcount" fill="#E8E4DA" radius={[3, 3, 0, 0]} />
-        {ds.hasRevenue && <Line yAxisId="right" type="monotone" dataKey="Rev/Employee" stroke="#1D4E4A" strokeWidth={2} dot={{ r: 3 }} />}
+        <CartesianGrid strokeDasharray="3 3" stroke="#1E2433" vertical={false} />
+        <XAxis dataKey="fy" tick={{ fontSize: 10, fill: "#96A0BE", fontFamily: "IBM Plex Mono" }} axisLine={{ stroke: "#2A3142" }} tickLine={false} />
+        <YAxis yAxisId="left" tick={{ fontSize: 10, fill: "#96A0BE", fontFamily: "IBM Plex Mono" }} axisLine={false} tickLine={false} width={36} />
+        <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 10, fill: "#96A0BE", fontFamily: "IBM Plex Mono" }} axisLine={false} tickLine={false} width={46} tickFormatter={(v) => `₹${v.toFixed(0)}L`} />
+        <Tooltip formatter={(v, n) => n === "Rev/Employee" ? `₹${v.toFixed(1)} L` : Math.round(v)} contentStyle={{ fontFamily: "IBM Plex Mono", fontSize: 12, border: "1px solid #2A3142", borderRadius: 8, background: "#0D1220", color: "#EAF0FA", boxShadow: "0 12px 32px -12px rgba(0,0,0,0.6)" }} />
+        <Legend wrapperStyle={{ fontFamily: "Inter", fontSize: 11, color: "#96A0BE" }} />
+        <Bar yAxisId="left" dataKey="Headcount" fill="#333B4F" radius={[3, 3, 0, 0]} />
+        {ds.hasRevenue && <Line yAxisId="right" type="monotone" dataKey="Rev/Employee" stroke="#2DD4BF" strokeWidth={2} dot={{ r: 3 }} />}
       </ComposedChart>
     </ResponsiveContainer>
   );
@@ -361,12 +441,12 @@ function QuarterlyRevenueChart({ ds }) {
   return (
     <ResponsiveContainer width="100%" height={210}>
       <BarChart data={data} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
-        <CartesianGrid strokeDasharray="3 3" stroke="#EEF0F3" vertical={false} />
-        <XAxis dataKey="period" tick={{ fontSize: 10, fill: "#8891A3", fontFamily: "IBM Plex Mono" }} axisLine={{ stroke: "#E5E7EB" }} tickLine={false} />
-        <YAxis tick={{ fontSize: 10, fill: "#8891A3", fontFamily: "IBM Plex Mono" }} axisLine={false} tickLine={false} tickFormatter={fmtCr} width={62} />
-        <Tooltip formatter={(v) => fmtCr(v)} contentStyle={{ fontFamily: "IBM Plex Mono", fontSize: 12, border: "1px solid #E5E7EB", borderRadius: 8 }} />
+        <CartesianGrid strokeDasharray="3 3" stroke="#1E2433" vertical={false} />
+        <XAxis dataKey="period" tick={{ fontSize: 10, fill: "#96A0BE", fontFamily: "IBM Plex Mono" }} axisLine={{ stroke: "#2A3142" }} tickLine={false} />
+        <YAxis tick={{ fontSize: 10, fill: "#96A0BE", fontFamily: "IBM Plex Mono" }} axisLine={false} tickLine={false} tickFormatter={fmtCr} width={62} />
+        <Tooltip formatter={(v) => fmtCr(v)} contentStyle={{ fontFamily: "IBM Plex Mono", fontSize: 12, border: "1px solid #2A3142", borderRadius: 8, background: "#0D1220", color: "#EAF0FA", boxShadow: "0 12px 32px -12px rgba(0,0,0,0.6)" }} />
         <Bar dataKey="value" radius={[3, 3, 0, 0]}>
-          {data.map((d, i) => <Cell key={i} fill={d.isLatest ? "#B08A3E" : "#1D4E4A"} />)}
+          {data.map((d, i) => <Cell key={i} fill={d.isLatest ? "#F5B759" : "#2DD4BF"} />)}
         </Bar>
       </BarChart>
     </ResponsiveContainer>
@@ -384,15 +464,15 @@ function EbitdaTurnaroundChart({ ds }) {
     <>
       <ResponsiveContainer width="100%" height={190}>
         <ComposedChart data={chartData} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
-          <CartesianGrid strokeDasharray="3 3" stroke="#EEF0F3" vertical={false} />
-          <XAxis dataKey="period" tick={{ fontSize: 10, fill: "#8891A3", fontFamily: "IBM Plex Mono" }} axisLine={{ stroke: "#E5E7EB" }} tickLine={false} />
-          <YAxis tick={{ fontSize: 10, fill: "#8891A3", fontFamily: "IBM Plex Mono" }} axisLine={false} tickLine={false} tickFormatter={fmtCr} width={62} />
-          <Tooltip formatter={(v) => (v === null ? "N/A" : fmtCr(v))} contentStyle={{ fontFamily: "IBM Plex Mono", fontSize: 12, border: "1px solid #E5E7EB", borderRadius: 8 }} />
-          <ReferenceLine y={0} stroke="#B3492F" strokeDasharray="2 2" />
+          <CartesianGrid strokeDasharray="3 3" stroke="#1E2433" vertical={false} />
+          <XAxis dataKey="period" tick={{ fontSize: 10, fill: "#96A0BE", fontFamily: "IBM Plex Mono" }} axisLine={{ stroke: "#2A3142" }} tickLine={false} />
+          <YAxis tick={{ fontSize: 10, fill: "#96A0BE", fontFamily: "IBM Plex Mono" }} axisLine={false} tickLine={false} tickFormatter={fmtCr} width={62} />
+          <Tooltip formatter={(v) => (v === null ? "N/A" : fmtCr(v))} contentStyle={{ fontFamily: "IBM Plex Mono", fontSize: 12, border: "1px solid #2A3142", borderRadius: 8, background: "#0D1220", color: "#EAF0FA", boxShadow: "0 12px 32px -12px rgba(0,0,0,0.6)" }} />
+          <ReferenceLine y={0} stroke="#FB7185" strokeDasharray="2 2" />
           <Bar dataKey="actual" radius={[3, 3, 0, 0]}>
-            {chartData.map((d, i) => <Cell key={i} fill={d.actual == null ? "transparent" : d.actual >= 0 ? "#16A34A" : "#B3492F"} />)}
+            {chartData.map((d, i) => <Cell key={i} fill={d.actual == null ? "transparent" : d.actual >= 0 ? "#4ADE80" : "#FB7185"} />)}
           </Bar>
-          {forecast && <Line type="monotone" dataKey="projected" stroke="#B08A3E" strokeWidth={2} strokeDasharray="5 5" dot={{ r: 3 }} />}
+          {forecast && <Line type="monotone" dataKey="projected" stroke="#F5B759" strokeWidth={2} strokeDasharray="5 5" dot={{ r: 3 }} />}
         </ComposedChart>
       </ResponsiveContainer>
       {forecast && (
@@ -412,12 +492,12 @@ function RevenueForecastChart({ ds }) {
     <>
       <ResponsiveContainer width="100%" height={190}>
         <ComposedChart data={forecast.chartData} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
-          <CartesianGrid strokeDasharray="3 3" stroke="#EEF0F3" vertical={false} />
-          <XAxis dataKey="period" tick={{ fontSize: 10, fill: "#8891A3", fontFamily: "IBM Plex Mono" }} axisLine={{ stroke: "#E5E7EB" }} tickLine={false} />
-          <YAxis tick={{ fontSize: 10, fill: "#8891A3", fontFamily: "IBM Plex Mono" }} axisLine={false} tickLine={false} tickFormatter={fmtCr} width={62} />
-          <Tooltip formatter={(v) => (v === null ? "N/A" : fmtCr(v))} contentStyle={{ fontFamily: "IBM Plex Mono", fontSize: 12, border: "1px solid #E5E7EB", borderRadius: 8 }} />
-          <Line type="monotone" dataKey="actual" stroke="#1D4E4A" strokeWidth={2} dot={{ r: 3 }} />
-          <Line type="monotone" dataKey="projected" stroke="#B08A3E" strokeWidth={2} strokeDasharray="5 5" dot={{ r: 3 }} />
+          <CartesianGrid strokeDasharray="3 3" stroke="#1E2433" vertical={false} />
+          <XAxis dataKey="period" tick={{ fontSize: 10, fill: "#96A0BE", fontFamily: "IBM Plex Mono" }} axisLine={{ stroke: "#2A3142" }} tickLine={false} />
+          <YAxis tick={{ fontSize: 10, fill: "#96A0BE", fontFamily: "IBM Plex Mono" }} axisLine={false} tickLine={false} tickFormatter={fmtCr} width={62} />
+          <Tooltip formatter={(v) => (v === null ? "N/A" : fmtCr(v))} contentStyle={{ fontFamily: "IBM Plex Mono", fontSize: 12, border: "1px solid #2A3142", borderRadius: 8, background: "#0D1220", color: "#EAF0FA", boxShadow: "0 12px 32px -12px rgba(0,0,0,0.6)" }} />
+          <Line type="monotone" dataKey="actual" stroke="#2DD4BF" strokeWidth={2} dot={{ r: 3 }} />
+          <Line type="monotone" dataKey="projected" stroke="#F5B759" strokeWidth={2} strokeDasharray="5 5" dot={{ r: 3 }} />
         </ComposedChart>
       </ResponsiveContainer>
       <div className="forecast-note">
@@ -545,7 +625,7 @@ function KeyPerformanceIndicatorsTable({ ds }) {
   }
 
   return (
-    <section className="section">
+    <Reveal className="section">
       <div className="fin-section__head">
         <div className="section__title">Key Performance Indicators</div>
         <PeriodToggle mode={mode} onChange={setMode} />
@@ -592,7 +672,7 @@ function KeyPerformanceIndicatorsTable({ ds }) {
           since this workbook currently splits revenue by client segment, not by fee type.
         </div>
       )}
-    </section>
+    </Reveal>
   );
 }
 
@@ -626,7 +706,7 @@ function GrayQuestKPITable({ ds }) {
   const unmatched = shareRows.filter(r => !r.matchedKey && !ds.companyConfig.fallbackKPIs?.[r.slug]);
 
   return (
-    <section className="section">
+    <Reveal className="section">
       <div className="fin-section__head">
         <div className="section__title">Key Performance Indicators</div>
         <PeriodToggle mode={mode} onChange={setMode} />
@@ -685,7 +765,7 @@ function GrayQuestKPITable({ ds }) {
           in this workbook — shown as N/A rather than guessed.
         </div>
       )}
-    </section>
+    </Reveal>
   );
 }
 
@@ -714,7 +794,7 @@ function RiskcovryKPITable({ ds }) {
   const unmatched = rows.filter(r => !r.matchedKey && !ds.companyConfig.fallbackKPIs?.[r.slug]);
 
   return (
-    <section className="section">
+    <Reveal className="section">
       <div className="fin-section__head">
         <div className="section__title">Key Performance Indicators</div>
         <PeriodToggle mode={mode} onChange={setMode} />
@@ -765,7 +845,7 @@ function RiskcovryKPITable({ ds }) {
           workbook — shown as N/A rather than a guessed figure.
         </div>
       )}
-    </section>
+    </Reveal>
   );
 }
 
@@ -795,7 +875,7 @@ function MultiplKPITable({ ds }) {
   const unmatched = rows.filter(r => !r.matchedKey && !ds.companyConfig.fallbackKPIs?.[r.slug]);
 
   return (
-    <section className="section">
+    <Reveal className="section">
       <div className="fin-section__head">
         <div className="section__title">Key Performance Indicators</div>
         <PeriodToggle mode={mode} onChange={setMode} />
@@ -836,7 +916,7 @@ function MultiplKPITable({ ds }) {
           rather than a guessed figure.
         </div>
       )}
-    </section>
+    </Reveal>
   );
 }
 
@@ -867,7 +947,7 @@ function FastsuranceKPITable({ ds }) {
   const unmatched = rows.filter(r => !r.matchedKey && !ds.companyConfig.fallbackKPIs?.[r.slug]);
 
   return (
-    <section className="section">
+    <Reveal className="section">
       <div className="fin-section__head">
         <div className="section__title">Key Performance Indicators</div>
         <PeriodToggle mode={mode} onChange={setMode} />
@@ -909,7 +989,7 @@ function FastsuranceKPITable({ ds }) {
           registrations/resolved-case tracker to the sheet to unlock these.
         </div>
       )}
-    </section>
+    </Reveal>
   );
 }
 
@@ -938,7 +1018,7 @@ function ApexFutureLabsKPITable({ ds }) {
   const unmatched = rows.filter(r => !r.matchedKey && !ds.companyConfig.fallbackKPIs?.[r.slug]);
 
   return (
-    <section className="section">
+    <Reveal className="section">
       <div className="fin-section__head">
         <div className="section__title">Key Performance Indicators</div>
         <PeriodToggle mode={mode} onChange={setMode} />
@@ -979,7 +1059,7 @@ function ApexFutureLabsKPITable({ ds }) {
           rather than a guessed figure.
         </div>
       )}
-    </section>
+    </Reveal>
   );
 }
 
@@ -1006,7 +1086,7 @@ function FinboxKPITable({ ds }) {
   const unmatched = rows.filter(r => !r.matchedKey && !ds.companyConfig.fallbackKPIs?.[r.slug]);
 
   return (
-    <section className="section">
+    <Reveal className="section">
       <div className="fin-section__head">
         <div className="section__title">Key Performance Indicators</div>
         <PeriodToggle mode={mode} onChange={setMode} />
@@ -1048,7 +1128,7 @@ function FinboxKPITable({ ds }) {
           metrics are shown as N/A above rather than estimated.
         </div>
       )}
-    </section>
+    </Reveal>
   );
 }
 
@@ -1073,7 +1153,7 @@ function FundamentoKPITable({ ds }) {
   const unmatched = rows.filter(r => !r.matchedKey && !ds.companyConfig.fallbackKPIs?.[r.slug]);
 
   return (
-    <section className="section">
+    <Reveal className="section">
       <div className="fin-section__head">
         <div className="section__title">Key Performance Indicators</div>
         <PeriodToggle mode={mode} onChange={setMode} />
@@ -1114,7 +1194,7 @@ function FundamentoKPITable({ ds }) {
           rather than a guessed figure.
         </div>
       )}
-    </section>
+    </Reveal>
   );
 }
 
@@ -1142,7 +1222,7 @@ function LeegalityKPITable({ ds }) {
   const unmatched = [...rows, ...(stockRow ? [stockRow] : [])].filter(r => !r.matchedKey && !ds.companyConfig.fallbackKPIs?.[r.slug]);
 
   return (
-    <section className="section">
+    <Reveal className="section">
       <div className="fin-section__head">
         <div className="section__title">Key Performance Indicators</div>
         <PeriodToggle mode={mode} onChange={setMode} />
@@ -1203,7 +1283,7 @@ function LeegalityKPITable({ ds }) {
           rather than a guessed figure.
         </div>
       )}
-    </section>
+    </Reveal>
   );
 }
 
@@ -1247,7 +1327,7 @@ function RevenueProfitabilityTable({ ds, title = "Revenue & Profitability" }) {
   };
 
   return (
-    <section className="section">
+    <Reveal className="section">
       <div className="fin-section__head">
         <div className="section__title">{title}</div>
         <div className="fin-section__controls">
@@ -1279,7 +1359,7 @@ function RevenueProfitabilityTable({ ds, title = "Revenue & Profitability" }) {
           </tbody>
         </table>
       </div>
-    </section>
+    </Reveal>
   );
 }
 
@@ -1354,7 +1434,7 @@ function ProfitAndLossTable({ ds }) {
   };
 
   return (
-    <section className="section">
+    <Reveal className="section">
       <div className="fin-section__head">
         <div className="section__title">Profit &amp; Loss Statement</div>
         <div className="fin-section__controls">
@@ -1388,19 +1468,19 @@ function ProfitAndLossTable({ ds }) {
           ))}
         </table>
       </div>
-    </section>
+    </Reveal>
   );
 }
 
 function PlaceholderSection({ title, note, eyebrow = "Coming next" }) {
   return (
-    <section className="section">
+    <Reveal className="section">
       <div className="placeholder-page">
         <div className="placeholder-page__eyebrow">{eyebrow}</div>
         <div className="placeholder-page__title">{title}</div>
         <div className="placeholder-page__note">{note}</div>
       </div>
-    </section>
+    </Reveal>
   );
 }
 
@@ -1566,7 +1646,7 @@ function NewsUpdatesPage({ ds }) {
     const companyName = ds.companyInfo?.companyName;
     const query = companyName && !/your company/i.test(companyName) ? companyName : null;
     return (
-      <section className="section">
+      <Reveal className="section">
         <div className="fin-section__head">
           <div className="section__title">News &amp; Updates</div>
         </div>
@@ -1574,7 +1654,7 @@ function NewsUpdatesPage({ ds }) {
           query={query}
           emptyHint='Add a real "Company Name" in the Company Info sheet to fetch live news for your company.'
         />
-      </section>
+      </Reveal>
     );
   }
 
@@ -1604,7 +1684,7 @@ function NewsUpdatesPage({ ds }) {
   const refreshedAt = ds.refreshMeta?.newsRefreshedAt;
 
   return (
-    <section className="section">
+    <Reveal className="section">
       <div className="fin-section__head">
         <div className="section__title">News &amp; Updates</div>
         <div className="news-refresh">
@@ -1636,7 +1716,7 @@ function NewsUpdatesPage({ ds }) {
       ) : (
         <div className="chart-empty">No relevant verified updates found for this filter.</div>
       )}
-    </section>
+    </Reveal>
   );
 }
 
@@ -1649,7 +1729,7 @@ function IndustryCompetitorsPage({ ds }) {
     const tag = ds.companyInfo?.tags?.[0];
     const query = cleanName ? `${cleanName} industry` : (tag ? `${tag} industry India` : null);
     return (
-      <section className="section">
+      <Reveal className="section">
         <div className="fin-section__head">
           <div className="section__title">Industry &amp; Competitors</div>
         </div>
@@ -1660,7 +1740,7 @@ function IndustryCompetitorsPage({ ds }) {
           query={query}
           emptyHint='Add a "Company Name" or a "Tag 1" in the Company Info sheet to fetch live industry news.'
         />
-      </section>
+      </Reveal>
     );
   }
 
@@ -1669,7 +1749,7 @@ function IndustryCompetitorsPage({ ds }) {
 
   return (
     <>
-      <section className="section">
+      <Reveal className="section">
         <div className="fin-section__head">
           <div className="section__title">Industry &amp; Competitors</div>
           {refreshedAt && <span className="news-refresh__stamp">● Data refreshed: {refreshedAt}</span>}
@@ -1687,10 +1767,10 @@ function IndustryCompetitorsPage({ ds }) {
             ))}
           </div>
         )}
-      </section>
+      </Reveal>
 
       {data.snapshot.length > 0 && (
-        <section className="section">
+        <Reveal className="section">
           <div className="section__title">Industry Snapshot</div>
           <div className="snapshot-grid">
             {data.snapshot.map(m => (
@@ -1705,11 +1785,11 @@ function IndustryCompetitorsPage({ ds }) {
               </div>
             ))}
           </div>
-        </section>
+        </Reveal>
       )}
 
       {data.trends.length > 0 && (
-        <section className="section">
+        <Reveal className="section">
           <div className="section__title">Industry Trends</div>
           <div className="chart-grid">
             {data.trends.map(t => (
@@ -1729,11 +1809,11 @@ function IndustryCompetitorsPage({ ds }) {
               </div>
             ))}
           </div>
-        </section>
+        </Reveal>
       )}
 
       {data.competitors.length > 0 && (
-        <section className="section">
+        <Reveal className="section">
           <div className="section__title">Competitive Landscape</div>
           <div className="fin-table-wrap">
             <table className="fin-table fin-table--competitors">
@@ -1770,11 +1850,11 @@ function IndustryCompetitorsPage({ ds }) {
               ))}
             </div>
           )}
-        </section>
+        </Reveal>
       )}
 
       {data.analysis.length > 0 && (
-        <section className="section">
+        <Reveal className="section">
           <div className="section__title">Company vs. Competitors <span className="section__sub">— dashboard analysis</span></div>
           <div className="analysis-list">
             {data.analysis.map((a, i) => (
@@ -1785,7 +1865,7 @@ function IndustryCompetitorsPage({ ds }) {
               </div>
             ))}
           </div>
-        </section>
+        </Reveal>
       )}
 
       {data.methodology && (
@@ -1834,7 +1914,7 @@ function ExecutiveSummary({ ds }) {
   const marginPrev = marginPick && marginPrevFY ? marginPrevFY[marginPick[0]] : null;
 
   return (
-    <section className="section narrative-section">
+    <Reveal className="section narrative-section">
       <div className="section__title">Performance Summary</div>
       <div className="narrative-grid">
         <div className="narrative-card">
@@ -1912,7 +1992,7 @@ function ExecutiveSummary({ ds }) {
           </div>
         </div>
       </div>
-    </section>
+    </Reveal>
   );
 }
 
@@ -1974,7 +2054,7 @@ function GrayQuestCommentary({ ds }) {
   const cofPrev = cofKey && prevFY && typeof prevFY[cofKey] === "number" ? prevFY[cofKey] : null;
 
   return (
-    <section className="section narrative-section">
+    <Reveal className="section narrative-section">
       <div className="section__title">Performance Commentary</div>
       <div className="narrative-grid">
         <div className="narrative-card">
@@ -2063,7 +2143,7 @@ function GrayQuestCommentary({ ds }) {
           </span>
         </div>
       )}
-    </section>
+    </Reveal>
   );
 }
 
@@ -2127,7 +2207,7 @@ function RiskcovryCommentary({ ds }) {
   const revPerEmpPrev = prevFY && typeof prevFY["Rev per Employee"] === "number" ? prevFY["Rev per Employee"] : null;
 
   return (
-    <section className="section narrative-section">
+    <Reveal className="section narrative-section">
       <div className="section__title">Performance Summary</div>
       <div className="narrative-grid">
         <div className="narrative-card">
@@ -2220,7 +2300,7 @@ function RiskcovryCommentary({ ds }) {
           </span>
         </div>
       )}
-    </section>
+    </Reveal>
   );
 }
 
@@ -2280,7 +2360,7 @@ function MultiplCommentary({ ds }) {
   const brandPrev = brandKey && prevFY && typeof prevFY[brandKey] === "number" ? prevFY[brandKey] : null;
 
   return (
-    <section className="section narrative-section">
+    <Reveal className="section narrative-section">
       <div className="section__title">Performance Commentary</div>
       <div className="narrative-grid">
         <div className="narrative-card">
@@ -2367,7 +2447,7 @@ function MultiplCommentary({ ds }) {
           </div>
         </div>
       </div>
-    </section>
+    </Reveal>
   );
 }
 
@@ -2404,7 +2484,7 @@ function FastsuranceCommentary({ ds }) {
   const pctResolvedCurr = pctResolvedRow?.matchedKey && latestFY && typeof latestFY[pctResolvedRow.matchedKey] === "number" ? latestFY[pctResolvedRow.matchedKey] : null;
 
   return (
-    <section className="section narrative-section">
+    <Reveal className="section narrative-section">
       <div className="section__title">Performance Commentary</div>
       <div className="narrative-grid">
         <div className="narrative-card">
@@ -2476,7 +2556,7 @@ function FastsuranceCommentary({ ds }) {
           </div>
         </div>
       </div>
-    </section>
+    </Reveal>
   );
 }
 
@@ -2514,7 +2594,7 @@ function VitraCommentary({ ds }) {
   const arpuCurr = arpuKey && latestFY && typeof latestFY[arpuKey] === "number" ? latestFY[arpuKey] : null;
 
   return (
-    <section className="section narrative-section">
+    <Reveal className="section narrative-section">
       <div className="section__title">Performance Commentary</div>
       <div className="narrative-grid">
         <div className="narrative-card">
@@ -2583,7 +2663,7 @@ function VitraCommentary({ ds }) {
           </div>
         </div>
       </div>
-    </section>
+    </Reveal>
   );
 }
 
@@ -2621,7 +2701,7 @@ function FinboxCommentary({ ds }) {
   const opAvailable = opRows.filter(r => r.matchedKey);
 
   return (
-    <section className="section narrative-section">
+    <Reveal className="section narrative-section">
       <div className="section__title">Performance Commentary</div>
       <div className="narrative-grid">
         <div className="narrative-card">
@@ -2699,7 +2779,7 @@ function FinboxCommentary({ ds }) {
           </div>
         </div>
       </div>
-    </section>
+    </Reveal>
   );
 }
 
@@ -2742,7 +2822,7 @@ function FundamentoCommentary({ ds }) {
     ? totalCostPrev / pulsesPrev : null;
 
   return (
-    <section className="section narrative-section">
+    <Reveal className="section narrative-section">
       <div className="section__title">Performance Commentary</div>
       <div className="narrative-grid">
         <div className="narrative-card">
@@ -2817,7 +2897,7 @@ function FundamentoCommentary({ ds }) {
           </div>
         </div>
       </div>
-    </section>
+    </Reveal>
   );
 }
 
@@ -2858,7 +2938,7 @@ function LeegalityCommentary({ ds }) {
   const subCurr = subKey && latestQ && typeof latestQ[subKey] === "number" ? latestQ[subKey] : null;
 
   return (
-    <section className="section narrative-section">
+    <Reveal className="section narrative-section">
       <div className="section__title">Performance Commentary</div>
       <div className="narrative-grid">
         <div className="narrative-card">
@@ -2934,7 +3014,7 @@ function LeegalityCommentary({ ds }) {
           </div>
         </div>
       </div>
-    </section>
+    </Reveal>
   );
 }
 
@@ -2947,7 +3027,7 @@ function BusinessDescription({ companyInfo }) {
   if (!description && !tags.length && !scaleMetrics.length) return null;
 
   return (
-    <section className="section narrative-section">
+    <Reveal className="section narrative-section">
       <div className="section__title">Business Description</div>
       <div className="biz-card">
         {description && <p className="biz-desc-text">{description}</p>}
@@ -2982,7 +3062,7 @@ function BusinessDescription({ companyInfo }) {
           </div>
         )}
       </div>
-    </section>
+    </Reveal>
   );
 }
 
@@ -3076,15 +3156,29 @@ export function DashboardView({ ds: dataset, fileName, headerActions, banner }) 
       </header>
 
       <nav className="dash-nav">
-        <button className={`dash-nav__tab ${section === "performance" ? "dash-nav__tab--active" : ""}`} onClick={() => setSection("performance")}>Performance</button>
-        <button className={`dash-nav__tab ${section === "industry" ? "dash-nav__tab--active" : ""}`} onClick={() => setSection("industry")}>Industry &amp; Competitors</button>
-        <button className={`dash-nav__tab ${section === "news" ? "dash-nav__tab--active" : ""}`} onClick={() => setSection("news")}>News &amp; Updates</button>
+        {[
+          { key: "performance", label: "Performance" },
+          { key: "industry", label: "Industry & Competitors" },
+          { key: "news", label: "News & Updates" },
+        ].map(tab => (
+          <button
+            key={tab.key}
+            className={`dash-nav__tab ${section === tab.key ? "dash-nav__tab--active" : ""}`}
+            onClick={() => setSection(tab.key)}
+          >
+            {tab.label}
+            {section === tab.key && (
+              <motion.span className="dash-nav__underline" layoutId="dashNavUnderline" transition={{ type: "spring", stiffness: 500, damping: 40 }} />
+            )}
+          </button>
+        ))}
       </nav>
 
       {banner}
 
+      <AnimatePresence mode="wait">
       {section === "performance" && (
-        <>
+        <motion.div key="performance" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }} transition={{ duration: 0.22, ease: "easeOut" }}>
           <BusinessDescription companyInfo={dataset.companyInfo} />
 
           {dataset.companyConfig.layout === "grayquest" ? (
@@ -3143,7 +3237,7 @@ export function DashboardView({ ds: dataset, fileName, headerActions, banner }) 
             </>
           )}
 
-          <section className="section">
+          <Reveal className="section">
             <div className="fin-section__head">
               <div className="section__title">Key Metrics <span className="section__sub">— {fy.label} vs {fyIndex > 0 ? dataset.fyData[fyIndex - 1].label : "—"}</span></div>
               <div className="fy-tabs">
@@ -3153,22 +3247,24 @@ export function DashboardView({ ds: dataset, fileName, headerActions, banner }) 
               </div>
             </div>
             <div className="kpi-grid">
-              {dataset.cardConfigs.map(cfg => (
-                <KpiCard key={cfg.key} cfg={cfg} ds={dataset} fyIndex={fyIndex} expanded={expanded} onToggle={onToggle} />
+              {dataset.cardConfigs.map((cfg, i) => (
+                <KpiCard key={cfg.key} cfg={cfg} ds={dataset} fyIndex={fyIndex} expanded={expanded} onToggle={onToggle} index={i} />
               ))}
             </div>
-          </section>
+          </Reveal>
 
-          {expanded && (
-            <DrillDownModal
-              cfg={dataset.cardConfigs.find(c => c.key === expanded)}
-              ds={dataset}
-              fyIndex={fyIndex}
-              onClose={() => setExpanded(null)}
-            />
-          )}
+          <AnimatePresence>
+            {expanded && (
+              <DrillDownModal
+                cfg={dataset.cardConfigs.find(c => c.key === expanded)}
+                ds={dataset}
+                fyIndex={fyIndex}
+                onClose={() => setExpanded(null)}
+              />
+            )}
+          </AnimatePresence>
 
-          <section className="section">
+          <Reveal className="section">
             <div className="section__title">Performance &amp; Mix</div>
             <div className="chart-grid">
               <div className="chart-card">
@@ -3192,10 +3288,10 @@ export function DashboardView({ ds: dataset, fileName, headerActions, banner }) 
                 <MarginTrendChart ds={dataset} />
               </div>
             </div>
-          </section>
+          </Reveal>
 
           {dataset.companyConfig.showForecast && (
-            <section className="section">
+            <Reveal className="section">
               <div className="section__title">Outlook &amp; Forecast <span className="section__sub">— quarterly, trend-projected</span></div>
               <div className="chart-grid">
                 <div className="chart-card">
@@ -3214,10 +3310,10 @@ export function DashboardView({ ds: dataset, fileName, headerActions, banner }) 
                   <RevenueForecastChart ds={dataset} />
                 </div>
               </div>
-            </section>
+            </Reveal>
           )}
 
-          <section className="section">
+          <Reveal className="section">
             <div className="section__title">Cash &amp; Operations</div>
             <div className="chart-grid">
               <div className="chart-card" style={{ gridColumn: "1 / -1" }}>
@@ -3226,7 +3322,7 @@ export function DashboardView({ ds: dataset, fileName, headerActions, banner }) 
                 <HeadcountChart ds={dataset} />
               </div>
             </div>
-          </section>
+          </Reveal>
 
           <ProfitAndLossTable ds={dataset} />
 
@@ -3241,12 +3337,21 @@ export function DashboardView({ ds: dataset, fileName, headerActions, banner }) 
               treat them as directional only.
             </span>
           </div>
-        </>
+        </motion.div>
       )}
 
-      {section === "industry" && <IndustryCompetitorsPage ds={dataset} />}
+      {section === "industry" && (
+        <motion.div key="industry" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }} transition={{ duration: 0.22, ease: "easeOut" }}>
+          <IndustryCompetitorsPage ds={dataset} />
+        </motion.div>
+      )}
 
-      {section === "news" && <NewsUpdatesPage ds={dataset} />}
+      {section === "news" && (
+        <motion.div key="news" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }} transition={{ duration: 0.22, ease: "easeOut" }}>
+          <NewsUpdatesPage ds={dataset} />
+        </motion.div>
+      )}
+      </AnimatePresence>
     </div>
   );
 }
@@ -3338,151 +3443,209 @@ export function App() {
 export function GlobalStyles() {
   return (
     <style>{`
-      @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
+      @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
 
-      .dash { --ink:#14171F; --muted:#6B7280; --border:#E5E7EB; --surface:#F7F8FA; --bg:#FFFFFF;
-              --brand:#1D4E4A; --gold:#B08A3E; --pos:#16A34A; --neg:#B3492F; --sage:#7C9885;
+      :root { color-scheme: dark; }
+
+      html, body { background:#070A11; }
+      body {
+        margin:0;
+        overflow-x:hidden;
+      }
+      /* Fixed, slowly-drifting aurora glow behind the whole app. Pure CSS —
+         no canvas/JS cost — and switched off entirely under reduced motion. */
+      body::before {
+        content:"";
+        position:fixed;
+        inset:-20vh -20vw;
+        z-index:-1;
+        background:
+          radial-gradient(45% 40% at 14% 10%, rgba(45,212,191,0.09), transparent 70%),
+          radial-gradient(40% 36% at 90% 15%, rgba(245,183,89,0.06), transparent 70%),
+          radial-gradient(50% 46% at 78% 95%, rgba(167,139,250,0.07), transparent 70%),
+          radial-gradient(36% 32% at 6% 90%, rgba(56,189,248,0.05), transparent 70%);
+        filter: blur(100px);
+        animation: auroraDrift 26s ease-in-out infinite alternate;
+        pointer-events:none;
+      }
+      @keyframes auroraDrift {
+        0%   { transform: translate3d(0,0,0) scale(1); }
+        50%  { transform: translate3d(-2%,1.5%,0) scale(1.06); }
+        100% { transform: translate3d(2%,-1%,0) scale(1.02); }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        body::before { animation:none; }
+        * { animation-duration:0.001ms !important; animation-iteration-count:1 !important; transition-duration:0.001ms !important; scroll-behavior:auto !important; }
+      }
+
+      ::selection { background:rgba(45,212,191,0.35); color:#fff; }
+      *:focus-visible { outline:2px solid var(--brand); outline-offset:2px; border-radius:4px; }
+
+      ::-webkit-scrollbar { width:10px; height:10px; }
+      ::-webkit-scrollbar-track { background:transparent; }
+      ::-webkit-scrollbar-thumb { background:rgba(255,255,255,0.14); border-radius:8px; border:2px solid transparent; background-clip:padding-box; }
+      ::-webkit-scrollbar-thumb:hover { background:rgba(255,255,255,0.22); background-clip:padding-box; }
+
+      .dash { --ink:#EAF0FA; --muted:#96A0BE; --border:rgba(255,255,255,0.10); --border-strong:rgba(255,255,255,0.18);
+              --surface:rgba(255,255,255,0.05); --bg:#070A11;
+              --brand:#2DD4BF; --brand-rgb:45,212,191; --gold:#F5B759; --gold-rgb:245,183,89;
+              --pos:#4ADE80; --pos-rgb:74,222,128; --neg:#FB7185; --neg-rgb:251,113,133; --sage:#38BDF8;
+              --glass: linear-gradient(180deg, rgba(255,255,255,0.055), rgba(255,255,255,0.02));
+              --glass-shadow: 0 1px 0 rgba(255,255,255,0.07) inset, 0 20px 44px -22px rgba(0,0,0,0.6);
               font-family:'Inter',sans-serif; color:var(--ink); background:var(--bg);
-              min-height:100vh; padding:0 0 64px 0; }
+              min-height:100vh; padding:0 0 64px 0; position:relative; }
       .dash * { box-sizing:border-box; }
+      .dash ::-webkit-scrollbar { width:10px; height:10px; }
 
       .empty-wrap { max-width:640px; margin:0 auto; padding:96px 24px 40px; text-align:center; }
       .empty-eyebrow { font-family:'IBM Plex Mono',monospace; font-size:11px; letter-spacing:0.12em; text-transform:uppercase; color:var(--gold); margin-bottom:8px; }
-      .empty-title { font-family:'Fraunces',serif; font-size:36px; font-weight:500; letter-spacing:-0.01em; margin-bottom:10px; }
+      .empty-title { font-family:'Space Grotesk',sans-serif; font-size:38px; font-weight:600; letter-spacing:-0.02em; margin-bottom:10px;
+                     background:linear-gradient(135deg,#fff 20%,var(--brand) 65%,var(--gold) 100%); -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent; }
       .empty-sub { font-size:14px; color:var(--muted); margin-bottom:36px; }
-      .dropzone { display:flex; flex-direction:column; align-items:center; gap:8px; border:1.5px dashed var(--border); border-radius:16px;
-                  padding:48px 24px; cursor:pointer; color:var(--brand); transition:border-color .15s, background .15s; }
-      .dropzone:hover, .dropzone--over { border-color:var(--brand); background:var(--surface); }
+      .dropzone { display:flex; flex-direction:column; align-items:center; gap:8px; border:1.5px dashed var(--border-strong); border-radius:16px;
+                  padding:48px 24px; cursor:pointer; color:var(--brand); transition:border-color .2s, background .2s, box-shadow .2s, transform .2s;
+                  background:var(--glass); backdrop-filter:blur(16px); }
+      .dropzone:hover, .dropzone--over { border-color:var(--brand); box-shadow:0 0 0 1px rgba(var(--brand-rgb),0.3), 0 12px 32px -12px rgba(var(--brand-rgb),0.35); transform:translateY(-2px); }
       .dropzone input { display:none; }
       .dropzone__title { font-size:14.5px; font-weight:600; color:var(--ink); margin-top:6px; }
       .dropzone__sub { font-family:'IBM Plex Mono',monospace; font-size:11.5px; color:var(--muted); }
-      .empty-status { margin-top:18px; font-family:'IBM Plex Mono',monospace; font-size:12px; padding:10px 14px; border-radius:8px; background:var(--surface); color:var(--muted); display:flex; align-items:center; gap:8px; justify-content:center; text-align:left; }
-      .empty-status--error { color:var(--neg); background:#FBF0EC; }
-      .empty-status--success { color:var(--pos); background:#EFF8F1; }
+      .empty-status { margin-top:18px; font-family:'IBM Plex Mono',monospace; font-size:12px; padding:10px 14px; border-radius:8px; background:var(--surface); border:1px solid var(--border); color:var(--muted); display:flex; align-items:center; gap:8px; justify-content:center; text-align:left; }
+      .empty-status--error { color:var(--neg); background:rgba(var(--neg-rgb),0.12); border-color:rgba(var(--neg-rgb),0.3); }
+      .empty-status--success { color:var(--pos); background:rgba(var(--pos-rgb),0.12); border-color:rgba(var(--pos-rgb),0.3); }
       .empty-hint { margin-top:28px; font-size:12px; color:var(--muted); line-height:1.6; }
 
-      .masthead { border-bottom:1px solid var(--border); padding:28px 40px 22px; display:flex; justify-content:space-between; align-items:flex-end; flex-wrap:wrap; gap:16px; }
+      .masthead { border-bottom:1px solid var(--border); padding:28px 40px 22px; display:flex; justify-content:space-between; align-items:flex-end; flex-wrap:wrap; gap:16px;
+                  background:linear-gradient(180deg, rgba(255,255,255,0.03), transparent); }
       .masthead__eyebrow { font-family:'IBM Plex Mono',monospace; font-size:11px; letter-spacing:0.12em; text-transform:uppercase; color:var(--gold); margin-bottom:6px; }
-      .masthead__title { font-family:'Fraunces',serif; font-size:32px; font-weight:500; letter-spacing:-0.01em; line-height:1.1; }
+      .masthead__title { font-family:'Space Grotesk',sans-serif; font-size:30px; font-weight:600; letter-spacing:-0.01em; line-height:1.1; color:var(--ink); }
       .masthead__meta { font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--muted); margin-top:6px; }
       .masthead__actions { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
 
-      .fy-tabs { display:flex; gap:4px; background:var(--surface); padding:4px; border-radius:10px; border:1px solid var(--border); }
-      .fy-tab { font-family:'IBM Plex Mono',monospace; font-size:12px; padding:8px 14px; border-radius:7px; border:none; background:transparent; color:var(--muted); cursor:pointer; transition:all .15s; white-space:nowrap; }
+      .fy-tabs { display:flex; gap:4px; background:var(--surface); padding:4px; border-radius:10px; border:1px solid var(--border); backdrop-filter:blur(10px); }
+      .fy-tab { font-family:'IBM Plex Mono',monospace; font-size:12px; padding:8px 14px; border-radius:7px; border:none; background:transparent; color:var(--muted); cursor:pointer; transition:all .18s; white-space:nowrap; }
       .fy-tab:hover { color:var(--ink); }
-      .fy-tab--active { background:var(--brand); color:#fff; }
+      .fy-tab--active { background:var(--brand); color:#052420; font-weight:600; box-shadow:0 0 16px -2px rgba(var(--brand-rgb),0.6); }
 
       .replace-btn { display:flex; align-items:center; gap:6px; font-family:'IBM Plex Mono',monospace; font-size:11.5px; color:var(--muted);
-                     border:1px solid var(--border); border-radius:9px; padding:9px 12px; cursor:pointer; transition:border-color .15s, color .15s; }
-      .replace-btn:hover { border-color:var(--brand); color:var(--brand); }
+                     border:1px solid var(--border); border-radius:9px; padding:9px 12px; cursor:pointer; transition:border-color .18s, color .18s, box-shadow .18s;
+                     background:var(--surface); backdrop-filter:blur(10px); }
+      .replace-btn:hover { border-color:var(--brand); color:var(--brand); box-shadow:0 0 0 1px rgba(var(--brand-rgb),0.25); }
       .replace-btn input { display:none; }
 
-      .upload-bar { margin:18px 40px 0; padding:10px 16px; border-radius:10px; display:flex; align-items:center; gap:10px; font-size:12.5px; }
+      .upload-bar { margin:18px 40px 0; padding:10px 16px; border-radius:10px; display:flex; align-items:center; gap:10px; font-size:12.5px; border:1px solid var(--border); }
       .upload-bar--info { background:var(--surface); color:var(--muted); }
-      .upload-bar--error { background:#FBF0EC; color:var(--neg); }
+      .upload-bar--error { background:rgba(var(--neg-rgb),0.12); color:var(--neg); border-color:rgba(var(--neg-rgb),0.3); }
 
       .section { padding:32px 40px 8px; }
-      .section__title { font-family:'Fraunces',serif; font-size:19px; font-weight:500; margin-bottom:16px; display:flex; align-items:baseline; gap:10px; }
-      .section__sub { font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--muted); }
+      .section__title { font-family:'Space Grotesk',sans-serif; font-size:19px; font-weight:600; margin-bottom:16px; display:flex; align-items:baseline; gap:10px; color:var(--ink); }
+      .section__sub { font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--muted); font-weight:400; }
 
       .narrative-section { padding-top:28px; }
       .narrative-grid { display:grid; grid-template-columns:1.3fr 1fr; gap:20px; }
       @media (max-width:900px) { .narrative-grid { grid-template-columns:1fr; } }
-      .narrative-card { border:1px solid #DDD3BC; border-radius:14px; padding:22px 24px; background:linear-gradient(180deg,#FFFDFA,#fff); }
+      .narrative-card, .biz-card, .stat-tile, .kpi-card, .chart-card, .news-card, .snapshot-tile, .analysis-item,
+      .modal-panel, .admin-panel, .biz-scale-tile {
+        background:var(--glass); backdrop-filter:blur(18px) saturate(140%); -webkit-backdrop-filter:blur(18px) saturate(140%);
+        border:1px solid var(--border); box-shadow:var(--glass-shadow);
+      }
+      .narrative-card { border-radius:14px; padding:22px 24px; border-color:rgba(var(--gold-rgb),0.28); }
       .narrative-card__eyebrow { font-family:'IBM Plex Mono',monospace; font-size:10.5px; text-transform:uppercase; letter-spacing:0.08em; color:var(--gold); margin-bottom:14px; }
       .narrative-bullets { display:flex; flex-direction:column; gap:16px; }
       .narrative-bullet { display:flex; gap:12px; align-items:flex-start; font-size:13.5px; line-height:1.65; color:var(--ink); }
-      .narrative-bullet__icon { flex-shrink:0; width:28px; height:28px; border-radius:8px; display:flex; align-items:center; justify-content:center; background:var(--surface); color:var(--brand); margin-top:1px; }
+      .narrative-bullet__icon { flex-shrink:0; width:28px; height:28px; border-radius:8px; display:flex; align-items:center; justify-content:center; background:rgba(var(--brand-rgb),0.14); color:var(--brand); margin-top:1px; }
       .narrative-extra-note { display:flex; align-items:flex-start; gap:6px; margin-top:16px; padding-top:16px; border-top:1px solid var(--border); font-size:12px; color:var(--muted); line-height:1.6; }
       .narrative-stat-col { display:flex; flex-direction:column; gap:14px; }
-      .stat-tile { border:1px solid var(--border); border-radius:12px; padding:16px; background:#fff; }
+      .stat-tile { border-radius:12px; padding:16px; transition:transform .2s, box-shadow .2s; }
+      .stat-tile:hover { transform:translateY(-2px); }
       .stat-tile__label { font-family:'IBM Plex Mono',monospace; font-size:10.5px; text-transform:uppercase; letter-spacing:0.06em; color:var(--muted); margin-bottom:6px; }
-      .stat-tile__value { font-family:'Fraunces',serif; font-size:22px; font-weight:500; }
+      .stat-tile__value { font-family:'Space Grotesk',sans-serif; font-size:22px; font-weight:600; color:var(--ink); }
       .stat-tile__sub { font-size:11px; color:var(--muted); margin-top:6px; display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
 
-      .biz-card { border:1px solid var(--border); border-radius:14px; padding:22px 24px; background:#fff; }
+      .biz-card { border-radius:14px; padding:22px 24px; }
       .biz-desc-text { font-size:13.5px; line-height:1.75; color:var(--ink); margin:0 0 18px; }
       .biz-chip-row { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:20px; }
-      .biz-chip { display:inline-flex; align-items:center; font-family:'IBM Plex Mono',monospace; font-size:11px; padding:7px 12px; border-radius:20px; border:1px solid var(--border); color:var(--brand); background:var(--surface); }
+      .biz-chip { display:inline-flex; align-items:center; font-family:'IBM Plex Mono',monospace; font-size:11px; padding:7px 12px; border-radius:20px; border:1px solid rgba(var(--brand-rgb),0.3); color:var(--brand); background:rgba(var(--brand-rgb),0.1); }
       .biz-scale-row { display:flex; gap:14px; flex-wrap:wrap; }
-      .biz-scale-tile { flex:1; min-width:150px; border:1px solid #DDD3BC; border-radius:12px; padding:16px; background:linear-gradient(180deg,#FFFDFA,#fff); display:flex; align-items:center; gap:12px; }
+      .biz-scale-tile { flex:1; min-width:150px; border-radius:12px; padding:16px; border-color:rgba(var(--gold-rgb),0.28); display:flex; align-items:center; gap:12px; }
       .biz-scale-icon { color:var(--gold); flex-shrink:0; }
-      .biz-scale-value { font-family:'Fraunces',serif; font-size:19px; font-weight:500; line-height:1.2; }
+      .biz-scale-value { font-family:'Space Grotesk',sans-serif; font-size:19px; font-weight:600; line-height:1.2; color:var(--ink); }
       .biz-scale-label { font-family:'IBM Plex Mono',monospace; font-size:10px; color:var(--muted); text-transform:uppercase; letter-spacing:0.05em; margin-top:2px; }
 
       .forecast-note { display:flex; align-items:center; gap:6px; font-family:'IBM Plex Mono',monospace; font-size:10.5px; color:var(--muted); margin:6px 0 10px; flex-wrap:wrap; }
       .forecast-dot { width:8px; height:8px; border-radius:2px; display:inline-block; }
-      .forecast-dot--actual { background:var(--brand); }
-      .forecast-dot--proj { background:var(--gold); }
+      .forecast-dot--actual { background:var(--brand); box-shadow:0 0 6px rgba(var(--brand-rgb),0.7); }
+      .forecast-dot--proj { background:var(--gold); box-shadow:0 0 6px rgba(var(--gold-rgb),0.7); }
 
       .kpi-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:14px; }
       @media (max-width:1100px) { .kpi-grid { grid-template-columns:repeat(2,1fr); } }
       @media (max-width:600px) { .kpi-grid { grid-template-columns:1fr; } }
 
-      .kpi-card { all:unset; display:block; box-sizing:border-box; border:1px solid var(--border); border-radius:12px; background:#fff;
-                  padding:16px 16px 14px; cursor:pointer; transition:box-shadow .15s, border-color .15s, transform .1s; }
-      .kpi-card:hover { border-color:#D5D9E0; box-shadow:0 2px 10px rgba(20,23,31,0.05); transform:translateY(-1px); }
-      .kpi-card:active { transform:translateY(0px) scale(0.99); }
-      .kpi-card--primary { border-color:#DDD3BC; background:linear-gradient(180deg,#FFFDFA,#fff); }
-      .kpi-card--active { border-color:var(--brand); box-shadow:0 0 0 3px rgba(29,78,74,0.12); }
+      .kpi-card { all:unset; display:block; box-sizing:border-box; border-radius:12px;
+                  padding:16px 16px 14px; cursor:pointer; transition:box-shadow .2s, border-color .2s, transform .2s; }
+      .kpi-card:hover { border-color:rgba(var(--brand-rgb),0.4); box-shadow:0 0 0 1px rgba(var(--brand-rgb),0.18), 0 16px 32px -16px rgba(var(--brand-rgb),0.4); transform:translateY(-3px); }
+      .kpi-card:active { transform:translateY(-1px) scale(0.99); }
+      .kpi-card--primary { border-color:rgba(var(--gold-rgb),0.32); }
+      .kpi-card--active { border-color:var(--brand); box-shadow:0 0 0 3px rgba(var(--brand-rgb),0.22), 0 16px 32px -16px rgba(var(--brand-rgb),0.5); }
       .kpi-card__top { display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; }
       .kpi-card__label { font-size:12px; color:var(--muted); font-weight:500; }
-      .kpi-card__chev { color:var(--muted); transform:rotate(-90deg); }
-      .kpi-card__value { font-family:'Fraunces',serif; font-size:26px; font-weight:500; letter-spacing:-0.01em; margin-bottom:10px; text-align:left; }
+      .kpi-card__chev { color:var(--muted); transform:rotate(-90deg); transition:transform .2s; }
+      .kpi-card--active .kpi-card__chev { transform:rotate(0deg); color:var(--brand); }
+      .kpi-card__value { font-family:'Space Grotesk',sans-serif; font-size:26px; font-weight:600; letter-spacing:-0.01em; margin-bottom:10px; text-align:left; color:var(--ink); font-variant-numeric:tabular-nums; }
       .kpi-card__foot { display:flex; align-items:center; justify-content:space-between; gap:8px; }
-      .kpi-card__spark { width:72px; height:36px; flex-shrink:0; opacity:0.8; }
+      .kpi-card__spark { width:72px; height:36px; flex-shrink:0; opacity:0.9; }
 
       .delta { display:inline-flex; align-items:center; gap:3px; font-family:'IBM Plex Mono',monospace; font-size:11.5px; font-weight:500; padding:3px 7px; border-radius:6px; }
-      .delta-pos { color:var(--pos); background:#EFF8F1; }
-      .delta-neg { color:var(--neg); background:#FBF0EC; }
+      .delta-pos { color:var(--pos); background:rgba(var(--pos-rgb),0.14); }
+      .delta-neg { color:var(--neg); background:rgba(var(--neg-rgb),0.14); }
       .delta-flat { color:var(--muted); background:var(--surface); }
 
-      .modal-backdrop { position:fixed; inset:0; background:rgba(20,23,31,0.45); backdrop-filter:blur(3px);
-                         display:flex; align-items:center; justify-content:center; padding:24px; z-index:1000; animation:fadeIn .15s ease; }
-      @keyframes fadeIn { from { opacity:0; } to { opacity:1; } }
-      .modal-panel { background:#fff; border-radius:16px; width:100%; max-width:620px; max-height:88vh; overflow-y:auto;
-                     padding:24px 28px 28px; box-shadow:0 24px 60px rgba(20,23,31,0.25); animation:popIn .18s cubic-bezier(.2,.9,.3,1); }
-      @keyframes popIn { from { opacity:0; transform:scale(0.96) translateY(6px); } to { opacity:1; transform:scale(1) translateY(0); } }
+      .modal-backdrop { position:fixed; inset:0; background:rgba(3,5,10,0.65); backdrop-filter:blur(6px);
+                         display:flex; align-items:center; justify-content:center; padding:24px; z-index:1000; }
+      .modal-panel { border-radius:16px; width:100%; max-width:620px; max-height:88vh; overflow-y:auto;
+                     padding:24px 28px 28px; box-shadow:var(--glass-shadow), 0 0 80px -20px rgba(var(--brand-rgb),0.25); }
       .modal-panel__header { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:18px; }
       .modal-panel__eyebrow { font-family:'IBM Plex Mono',monospace; font-size:10.5px; text-transform:uppercase; letter-spacing:0.08em; color:var(--gold); margin-bottom:4px; }
-      .modal-panel__title { font-family:'Fraunces',serif; font-size:22px; font-weight:500; }
-      .modal-panel__close { all:unset; cursor:pointer; color:var(--muted); padding:6px; border-radius:8px; }
+      .modal-panel__title { font-family:'Space Grotesk',sans-serif; font-size:22px; font-weight:600; color:var(--ink); }
+      .modal-panel__close { all:unset; cursor:pointer; color:var(--muted); padding:6px; border-radius:8px; transition:background .15s, color .15s; }
       .modal-panel__close:hover { background:var(--surface); color:var(--ink); }
       .modal-panel__value-row { display:flex; align-items:center; gap:10px; margin-bottom:22px; flex-wrap:wrap; }
-      .modal-panel__value { font-family:'Fraunces',serif; font-size:34px; font-weight:500; }
+      .modal-panel__value { font-family:'Space Grotesk',sans-serif; font-size:34px; font-weight:600; color:var(--ink); font-variant-numeric:tabular-nums; }
       .modal-panel__vs { font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--muted); }
 
       .drawer-subhead { font-family:'IBM Plex Mono',monospace; font-size:10.5px; text-transform:uppercase; letter-spacing:0.06em; color:var(--muted); margin-bottom:10px; }
       .fy-bars { display:flex; gap:10px; align-items:flex-end; }
-      .fy-bar-col { flex:1; text-align:center; opacity:0.55; }
+      .fy-bar-col { flex:1; text-align:center; opacity:0.5; transition:opacity .2s; }
       .fy-bar-col--active { opacity:1; }
       .fy-bar-track { height:60px; display:flex; align-items:flex-end; justify-content:center; }
-      .fy-bar { width:22px; background:var(--brand); border-radius:3px 3px 0 0; }
-      .fy-bar--neg { background:var(--neg); }
+      .fy-bar { width:22px; background:linear-gradient(180deg, var(--brand), rgba(var(--brand-rgb),0.55)); border-radius:3px 3px 0 0; transition:height .3s cubic-bezier(.2,.8,.3,1); }
+      .fy-bar--neg { background:linear-gradient(180deg, var(--neg), rgba(var(--neg-rgb),0.55)); }
       .fy-bar-label { font-family:'IBM Plex Mono',monospace; font-size:10px; color:var(--muted); margin-top:6px; }
       .fy-bar-value { font-family:'IBM Plex Mono',monospace; font-size:9.5px; color:var(--ink); margin-top:2px; }
 
       .chart-grid { display:grid; grid-template-columns:1fr 1fr; gap:20px; margin-top:8px; }
       @media (max-width:900px) { .chart-grid { grid-template-columns:1fr; } }
-      .chart-card { border:1px solid var(--border); border-radius:12px; padding:18px 18px 8px; background:#fff; }
-      .chart-card__title { font-size:13px; font-weight:600; margin-bottom:2px; }
+      .chart-card { border-radius:12px; padding:18px 18px 8px; transition:box-shadow .2s, transform .2s, border-color .2s; }
+      .chart-card:hover { border-color:var(--border-strong); box-shadow:var(--glass-shadow), 0 0 0 1px rgba(255,255,255,0.06); }
+      .chart-card__title { font-size:13px; font-weight:600; margin-bottom:2px; color:var(--ink); }
       .chart-card__note { font-size:11px; color:var(--muted); margin-bottom:10px; }
       .chart-empty { font-size:12.5px; color:var(--muted); padding:40px 8px; text-align:center; }
 
       .footnote { padding:24px 40px 0; font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--muted); display:flex; gap:8px; align-items:flex-start; line-height:1.6; }
 
       /* ---- top-level section nav ---- */
-      .dash-nav { display:flex; gap:4px; padding:0 40px; border-bottom:1px solid var(--border); background:var(--surface); overflow-x:auto; }
+      .dash-nav { display:flex; gap:4px; padding:0 40px; border-bottom:1px solid var(--border); background:#0B0F19; overflow-x:auto; }
       .dash-nav__tab { font-family:'IBM Plex Mono',monospace; font-size:12.5px; white-space:nowrap; padding:14px 18px; border:none; background:transparent;
-                       color:var(--muted); cursor:pointer; border-bottom:2px solid transparent; margin-bottom:-1px; transition:color .15s, border-color .15s; }
+                       color:var(--muted); cursor:pointer; border-bottom:2px solid transparent; margin-bottom:-1px; transition:color .18s; position:relative; }
       .dash-nav__tab:hover { color:var(--ink); }
-      .dash-nav__tab--active { color:var(--brand); border-bottom-color:var(--brand); font-weight:600; }
+      .dash-nav__tab--active { color:var(--brand); font-weight:600; text-shadow:0 0 18px rgba(var(--brand-rgb),0.5); }
+      .dash-nav__underline { position:absolute; left:10px; right:10px; bottom:-2px; height:2px; border-radius:2px;
+                              background:var(--brand); box-shadow:0 0 10px 1px rgba(var(--brand-rgb),0.7); }
       @media (max-width:600px) { .dash-nav { padding:0 20px; } }
 
       /* ---- placeholder pages (Industry & Competitors, News & Updates) ---- */
-      .placeholder-page { max-width:520px; margin:48px auto; text-align:center; padding:48px 24px; border:1px dashed var(--border); border-radius:16px; }
+      .placeholder-page { max-width:520px; margin:48px auto; text-align:center; padding:48px 24px; border:1px dashed var(--border-strong); border-radius:16px; background:var(--surface); backdrop-filter:blur(12px); }
       .placeholder-page__eyebrow { font-family:'IBM Plex Mono',monospace; font-size:11px; letter-spacing:0.12em; text-transform:uppercase; color:var(--gold); margin-bottom:10px; }
-      .placeholder-page__title { font-family:'Fraunces',serif; font-size:26px; font-weight:500; margin-bottom:10px; }
+      .placeholder-page__title { font-family:'Space Grotesk',sans-serif; font-size:26px; font-weight:600; margin-bottom:10px; color:var(--ink); }
       .placeholder-page__note { font-size:13px; color:var(--muted); line-height:1.6; }
 
       /* ---- financial tables (Revenue & Profitability, P&L) ---- */
@@ -3491,38 +3654,38 @@ export function GlobalStyles() {
       .fin-section__controls { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
 
       .export-btn { display:flex; align-items:center; gap:6px; font-family:'IBM Plex Mono',monospace; font-size:11.5px; font-weight:500; color:var(--brand);
-                    border:1px solid var(--brand); border-radius:9px; padding:8px 12px; cursor:pointer; background:#fff; transition:background .15s, color .15s; white-space:nowrap; }
-      .export-btn:hover { background:var(--brand); color:#fff; }
+                    border:1px solid rgba(var(--brand-rgb),0.4); border-radius:9px; padding:8px 12px; cursor:pointer; background:rgba(var(--brand-rgb),0.08); transition:background .18s, color .18s, box-shadow .18s; white-space:nowrap; }
+      .export-btn:hover { background:var(--brand); color:#052420; box-shadow:0 0 20px -4px rgba(var(--brand-rgb),0.6); }
 
-      .period-toggle { display:flex; gap:4px; background:var(--surface); padding:4px; border-radius:10px; border:1px solid var(--border); flex-shrink:0; }
-      .period-toggle__btn { font-family:'IBM Plex Mono',monospace; font-size:12px; padding:7px 14px; border-radius:7px; border:none; background:transparent; color:var(--muted); cursor:pointer; transition:all .15s; white-space:nowrap; }
+      .period-toggle { display:flex; gap:4px; background:var(--surface); padding:4px; border-radius:10px; border:1px solid var(--border); flex-shrink:0; backdrop-filter:blur(10px); }
+      .period-toggle__btn { font-family:'IBM Plex Mono',monospace; font-size:12px; padding:7px 14px; border-radius:7px; border:none; background:transparent; color:var(--muted); cursor:pointer; transition:all .18s; white-space:nowrap; }
       .period-toggle__btn:hover { color:var(--ink); }
-      .period-toggle__btn--active { background:var(--brand); color:#fff; }
+      .period-toggle__btn--active { background:var(--brand); color:#052420; font-weight:600; box-shadow:0 0 16px -2px rgba(var(--brand-rgb),0.6); }
 
-      .fin-table-wrap { overflow-x:auto; border:1px solid var(--border); border-radius:12px; }
+      .fin-table-wrap { overflow-x:auto; border:1px solid var(--border); border-radius:12px; background:var(--glass); backdrop-filter:blur(18px); box-shadow:var(--glass-shadow); }
       .fin-table { width:100%; border-collapse:collapse; font-family:'IBM Plex Mono',monospace; font-size:12.5px; white-space:nowrap; }
-      .fin-table thead th { text-align:right; font-weight:500; color:var(--muted); font-size:10.5px; text-transform:uppercase; letter-spacing:0.04em; padding:12px 16px; border-bottom:1px solid var(--border); background:var(--surface); }
-      .fin-table tbody td { text-align:right; padding:10px 16px; border-bottom:1px solid #F0F1F3; color:var(--ink); }
+      .fin-table thead th { text-align:right; font-weight:500; color:var(--muted); font-size:10.5px; text-transform:uppercase; letter-spacing:0.04em; padding:12px 16px; border-bottom:1px solid var(--border); background:rgba(255,255,255,0.03); }
+      .fin-table tbody td { text-align:right; padding:10px 16px; border-bottom:1px solid rgba(255,255,255,0.05); color:var(--ink); }
       .fin-table tbody tr:last-child td { border-bottom:none; }
-      .fin-table tbody tr:not(.fin-table__section-row):hover td { background:#FAFAF7; }
+      .fin-table tbody tr:not(.fin-table__section-row):hover td { background:rgba(255,255,255,0.035); }
       .fin-table tbody tr:not(.fin-table__section-row) td:last-child,
-      .fin-table thead th:last-child { background:#F6F1E4; }
+      .fin-table thead th:last-child { background:rgba(var(--gold-rgb),0.1); }
       .fin-table thead th:last-child { font-weight:600; }
-      .fin-table tbody tr:not(.fin-table__section-row):hover td:last-child { background:#F1EBD9; }
+      .fin-table tbody tr:not(.fin-table__section-row):hover td:last-child { background:rgba(var(--gold-rgb),0.16); }
 
-      .fin-table__label-col { position:sticky; left:0; background:#fff; font-family:'Inter',sans-serif; font-size:12.5px; font-weight:500;
+      .fin-table__label-col { position:sticky; left:0; background:#0B0F19; font-family:'Inter',sans-serif; font-size:12.5px; font-weight:500;
                                text-align:left !important; z-index:1; border-right:1px solid var(--border); min-width:170px; }
-      .fin-table thead th.fin-table__label-col { background:var(--surface); z-index:2; }
+      .fin-table thead th.fin-table__label-col { background:#0D1220; z-index:2; }
       .fin-table__partial { color:var(--gold); font-weight:500; }
 
-      .fin-table__section-row td { background:var(--surface); font-family:'Inter',sans-serif; font-size:11px; font-weight:600; text-transform:uppercase;
+      .fin-table__section-row td { background:rgba(255,255,255,0.03); font-family:'Inter',sans-serif; font-size:11px; font-weight:600; text-transform:uppercase;
                                     letter-spacing:0.05em; color:var(--brand); text-align:left; padding:9px 16px; border-bottom:1px solid var(--border); }
       .fin-table__subtotal-row td { font-weight:600; border-top:1px solid var(--border); }
-      .fin-table__subtotal-row td.fin-table__label-col { background:#fff; }
+      .fin-table__subtotal-row td.fin-table__label-col { background:#0B0F19; }
       .fin-table .delta { font-size:11px; padding:2px 6px; justify-content:flex-end; }
 
       /* ---- Key Performance Indicators table: compact, emphasized business-line rows ---- */
-      .fin-table-wrap--kpi { border-color:var(--gold); border-width:1.5px; }
+      .fin-table-wrap--kpi { border-color:rgba(var(--gold-rgb),0.4); border-width:1.5px; }
       .fin-table--kpi tbody tr td.fin-table__label-col { font-weight:600; color:var(--brand); }
       .fin-table--kpi tbody tr td:not(.fin-table__label-col) { font-family:'Inter',sans-serif; font-weight:500; font-variant-numeric:tabular-nums; }
       .fin-table--kpi tbody tr:not(:last-child) td { border-bottom:1px solid var(--border); }
@@ -3531,7 +3694,7 @@ export function GlobalStyles() {
 
       /* ---- source links (used throughout Industry & Competitors / News) ---- */
       .src-link { display:inline-flex; align-items:center; gap:2px; font-family:'IBM Plex Mono',monospace; font-size:11px;
-                  color:var(--brand); text-decoration:none; border-bottom:1px dotted var(--brand); white-space:nowrap; }
+                  color:var(--brand); text-decoration:none; border-bottom:1px dotted var(--brand); white-space:nowrap; transition:color .15s, border-color .15s; }
       .src-link:hover { color:var(--gold); border-bottom-color:var(--gold); }
       .src-link__arrow { font-size:10px; }
 
@@ -3542,33 +3705,35 @@ export function GlobalStyles() {
       .news-filters { display:flex; flex-direction:column; gap:8px; margin-bottom:18px; }
       .news-filters__group { display:flex; gap:6px; flex-wrap:wrap; }
       .chip { font-family:'Inter',sans-serif; font-size:12px; padding:6px 12px; border-radius:20px; border:1px solid var(--border);
-              background:#fff; color:var(--muted); cursor:pointer; transition:all .15s; white-space:nowrap; }
+              background:var(--surface); color:var(--muted); cursor:pointer; transition:all .18s; white-space:nowrap; backdrop-filter:blur(10px); }
       .chip--mono { font-family:'IBM Plex Mono',monospace; font-size:11px; }
       .chip:hover { border-color:var(--brand); color:var(--brand); }
-      .chip--active { background:var(--brand); border-color:var(--brand); color:#fff; }
+      .chip--active { background:var(--brand); border-color:var(--brand); color:#052420; font-weight:600; box-shadow:0 0 16px -2px rgba(var(--brand-rgb),0.6); }
       .news-expanded-note { font-size:12px; color:var(--gold); margin-bottom:14px; font-style:italic; }
       .news-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(300px, 1fr)); gap:14px; }
-      .news-card { border:1px solid var(--border); border-radius:12px; padding:16px 18px; background:#fff; display:flex; flex-direction:column; gap:8px; }
+      .news-card { border-radius:12px; padding:16px 18px; display:flex; flex-direction:column; gap:8px; transition:transform .2s, box-shadow .2s; }
+      .news-card:hover { transform:translateY(-2px); }
       .news-card__top { display:flex; justify-content:space-between; align-items:center; gap:8px; }
       .news-card__category { font-family:'IBM Plex Mono',monospace; font-size:10px; text-transform:uppercase; letter-spacing:0.05em;
-                              color:var(--brand); background:var(--surface); padding:3px 8px; border-radius:6px; }
+                              color:var(--brand); background:rgba(var(--brand-rgb),0.12); padding:3px 8px; border-radius:6px; }
       .news-card__date { font-family:'IBM Plex Mono',monospace; font-size:10.5px; color:var(--muted); }
-      .news-card__title { font-family:'Fraunces',serif; font-size:16px; font-weight:500; line-height:1.35; }
+      .news-card__title { font-family:'Space Grotesk',sans-serif; font-size:16px; font-weight:600; line-height:1.35; color:var(--ink); }
       .news-card__summary { font-size:12.5px; color:var(--muted); line-height:1.55; }
       .news-card__sources { display:flex; gap:12px; flex-wrap:wrap; margin-top:auto; padding-top:6px; }
 
       /* ---- Industry & Competitors ---- */
       .snapshot-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(220px, 1fr)); gap:14px; }
-      .snapshot-tile { border:1px solid var(--border); border-radius:12px; padding:16px; background:#fff; }
+      .snapshot-tile { border-radius:12px; padding:16px; transition:transform .2s; }
+      .snapshot-tile:hover { transform:translateY(-2px); }
       .snapshot-tile__label { font-size:12px; color:var(--muted); font-weight:500; margin-bottom:8px; }
-      .snapshot-tile__value { font-family:'Fraunces',serif; font-size:22px; font-weight:500; margin-bottom:8px; }
+      .snapshot-tile__value { font-family:'Space Grotesk',sans-serif; font-size:22px; font-weight:600; margin-bottom:8px; color:var(--ink); }
       .snapshot-tile__meta { display:flex; align-items:center; justify-content:space-between; gap:8px; }
-      .snapshot-tile__period { font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--gold); background:#F6F1E4; padding:2px 7px; border-radius:6px; }
+      .snapshot-tile__period { font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--gold); background:rgba(var(--gold-rgb),0.14); padding:2px 7px; border-radius:6px; }
       .snapshot-tile__note { font-size:11.5px; color:var(--muted); margin-top:8px; line-height:1.5; }
 
       .trend-card { display:flex; flex-direction:column; }
       .trend-card__desc { font-size:12.5px; color:var(--ink); line-height:1.6; margin:4px 0 10px; }
-      .trend-card__why { font-size:12px; color:var(--muted); line-height:1.55; background:var(--surface); border-radius:8px; padding:10px 12px; margin-bottom:10px; }
+      .trend-card__why { font-size:12px; color:var(--muted); line-height:1.55; background:rgba(255,255,255,0.03); border:1px solid var(--border); border-radius:8px; padding:10px 12px; margin-bottom:10px; }
       .trend-card__why-label { display:block; font-family:'IBM Plex Mono',monospace; font-size:10px; text-transform:uppercase; letter-spacing:0.05em; color:var(--brand); margin-bottom:4px; }
       .trend-card__foot { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-top:auto; }
       .trend-card__date { font-family:'IBM Plex Mono',monospace; font-size:10.5px; color:var(--muted); }
@@ -3585,9 +3750,14 @@ export function GlobalStyles() {
 
       .analysis-list { display:flex; flex-direction:column; gap:10px; }
       .analysis-item { display:flex; align-items:flex-start; gap:10px; flex-wrap:wrap; font-size:13px; line-height:1.6;
-                        border:1px solid var(--border); border-radius:10px; padding:12px 14px; background:#fff; }
+                        border-radius:10px; padding:12px 14px; }
       .analysis-item__badge { flex-shrink:0; font-family:'IBM Plex Mono',monospace; font-size:9.5px; text-transform:uppercase; letter-spacing:0.05em;
-                               color:var(--gold); background:#F6F1E4; padding:3px 8px; border-radius:6px; }
+                               color:var(--gold); background:rgba(var(--gold-rgb),0.14); padding:3px 8px; border-radius:6px; }
+
+      /* ---- shared motion utilities (paired with Framer Motion in JSX) ---- */
+      .skeleton-pulse { background:linear-gradient(90deg, rgba(255,255,255,0.04) 25%, rgba(255,255,255,0.09) 50%, rgba(255,255,255,0.04) 75%);
+                         background-size:200% 100%; animation:skeletonShimmer 1.4s ease-in-out infinite; }
+      @keyframes skeletonShimmer { 0% { background-position:200% 0; } 100% { background-position:-200% 0; } }
     `}</style>
   );
 }
