@@ -578,6 +578,23 @@ const COMPANY_CONFIGS = {
         { label: "% Resolved", slug: "pctResolved", matchers: [/%\s*resolved/i, /resolution\s*rate/i, /resolved\s*%/i], fmt: fmtPct },
       ],
     },
+    // TEMPORARY fallback — none of the four operational KPI rows above exist
+    // in this standardized MIS today (see the comment above `kpi:`), so every
+    // cell is N/A from real data alone. Counts (totalRegistrations,
+    // totalResolvedCases) are plain integers matching fmtNum's Math.round.
+    // resolvedCaseValue is stored as raw rupees (Cr value × 1e7, same
+    // convention as Riskcovry's gwp / Leegality's esigns above) to match
+    // fmtCrPlain's /1e7. pctResolved is a fraction (fmtPct multiplies by
+    // 100). withFallback() only ever substitutes these when the real
+    // MIS-matched value for that specific period is null — a future upload
+    // that adds real registrations/resolved-case rows immediately takes
+    // priority over these figures with no code change required.
+    fallbackKPIs: {
+      totalRegistrations: { FY24: 9959, FY25: 13967, FY26: 14139, Q4FY25: 3706, Q4FY26: 2840 },
+      totalResolvedCases: { FY24: 4005, FY25: 5140, FY26: 5868, Q4FY25: 1355, Q4FY26: 1631 },
+      resolvedCaseValue: { FY24: 43.7e7, FY25: 59.2e7, FY26: 75.3e7, Q4FY25: 15.4e7, Q4FY26: 20.0e7 },
+      pctResolved: { FY24: 0.402, FY25: 0.368, FY26: 0.415, Q4FY25: 0.366, Q4FY26: 0.574 },
+    },
     showForecast: false,
     layout: "fastsurance",
   },
