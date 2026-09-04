@@ -1026,6 +1026,193 @@ const COMPANY_CONFIGS = {
     showForecast: false,
     layout: "fundamento",
   },
+  knightFintech: {
+    id: "knightFintech",
+    defaultDescription: {
+      companyName: "Knight FinTech",
+      description: "Knight FinTech is a B2B lending-technology SaaS platform, tracked via ARR/ACR/MRR alongside " +
+        "server-infrastructure and customer-support costs typical of a software business, with a two-tier cost " +
+        "structure (per-unit Direct/Indirect costs plus a shared Centralized Indirect cost pool).",
+      tags: ["Lending Technology", "B2B SaaS"],
+      scaleMetrics: [],
+      strategicNote: null,
+    },
+    // Distinctive Knight FinTech row names — none appear in any other company's sheet.
+    signals: [/unit\s*gross\s*margin\s*\(%\)/i, /unit\s*ebitda\s*\(core/i, /centralized\s*indirect\s*costs/i, /interest\s*costs?\s*\(vd\)/i],
+    revenueBaseKey: "Revenue",
+    revenueLabel: "Revenue",
+    // This sheet has no row literally named "Gross Profit"/"EBITDA" — canonical
+    // aliases onto its real row names. "Gross Margin" here is a currency figure
+    // (Revenue − Direct Costs) despite the name, same quirk as FinBox's own
+    // "Gross Margin" row. "EBITDA (Final, incl. Non-operating)" is the fullest
+    // P&L waterfall's bottom line (after Operating EBITDA + non-operating
+    // income/costs), used as the canonical EBITDA rather than any of the
+    // earlier "Unit EBITDA (Core...)" partial-waterfall rows.
+    keyAliases: {
+      "Gross Profit": "Gross Margin",
+      "EBITDA": "EBITDA (Final, incl. Non-operating)",
+      "Direct Expenses": "Direct Costs",
+    },
+    // This workbook splits operating costs into TWO separate pools ("Indirect
+    // Costs" — team/product costs, and "Centralized Indirect Costs" — shared
+    // founder/ops costs) rather than one single Opex row. "Indirect Costs" is
+    // used as the Complete P&L's Operating Expenses line since it's the larger
+    // of the two; "Centralized Indirect Costs" is NOT included in this figure
+    // (shown as its own separate line item instead) — NOT independently
+    // verified to be the "textbook-correct" single Opex figure, flagged here
+    // rather than silently treated as complete.
+    opexKey: "Indirect Costs",
+    priorityOrder: [
+      "Revenue", "Direct Costs", "Gross Margin", "Indirect Costs", "Centralized Indirect Costs",
+      "Operating EBITDA", "EBITDA (Final, incl. Non-operating)", "ARR", "MRR", "Interest Costs (VD)", "PBDT",
+    ],
+    // No verified revenue sub-line breakdown exists in this workbook (a single
+    // "Revenue" row, no per-product/segment split) — left empty rather than
+    // guessed, same pattern as MULTIPL/Fundamento.
+    pnlRevenueSubLines: [],
+    showForecast: false,
+    layout: "generic",
+  },
+  traqcheck: {
+    id: "traqcheck",
+    defaultDescription: {
+      companyName: "Traqcheck",
+      description: "Traqcheck monetizes a data/verification services business via both " +
+        "pay-per-usage and subscription customers, tracked by client counts and ARPU, with a multi-stage " +
+        "contribution-margin P&L (Gross Margin -> CM1 -> CM2 -> EBITDA).",
+      tags: ["Data & Verification Services", "Pay-per-Usage"],
+      scaleMetrics: [],
+      strategicNote: null,
+    },
+    // Distinctive Traqcheck row names — none appear in any other company's sheet.
+    signals: [/cm1\s*\(contribution\s*margin\)/i, /cm2\s*\(contribution\s*margin\)/i, /arpu\s*for\s*pay\s*per\s*usage/i, /saas\s*subscription\s*charges/i],
+    revenueBaseKey: "Revenue",
+    revenueLabel: "Revenue",
+    // Verified numerically (Apr-26 and Jul-26): "Pay per Usage Revenue" +
+    // "Monthly Subscription Fees (MSF)" + "Other Income" sum exactly to "Revenue".
+    pnlRevenueSubLines: [/^Pay per Usage Revenue$/i, /^Monthly Subscription Fees \(MSF\)$/i, /^Other Income$/i],
+    // "Contra Revenue Cost" and "Data Cost" are exact duplicate rows (same
+    // values every month) — "Data Cost" is the more descriptive label, kept as
+    // the canonical Direct Expenses; "Contra Revenue Cost" excluded as a
+    // redundant duplicate. "Gross Margin" here is a currency figure (Revenue −
+    // Data Cost), aliased onto canonical Gross Profit. "GM %" and "EBITDA
+    // Margin % (After One-off Cost)" are precomputed ratios redundant with
+    // this dashboard's own computed margins — excluded so only one margin
+    // figure (dashboard-computed) is shown per concept, not two.
+    keyAliases: {
+      "Gross Profit": "Gross Margin",
+      "EBITDA": "EBITDA (After One-off Cost)",
+      "Direct Expenses": "Data Cost",
+    },
+    excludeRowMatchers: [/^Contra Revenue Cost$/i, /^GM %$/i, /^EBITDA Margin % \(After One-off Cost\)$/i],
+    // "Other Cost" (Personnel + Facilities + Professional + Other Expenses) is
+    // the SG&A-style pool immediately before EBITDA — used as the Complete
+    // P&L's Operating Expenses line. "Variable Cost" and "Marketing Cost" are
+    // intermediate cost pools staged between Gross Margin and EBITDA (feeding
+    // CM1/CM2) and are NOT folded into this opexKey — shown as their own line
+    // items instead, same caveat as Knight FinTech's two-pool structure above.
+    opexKey: "Other Cost",
+    priorityOrder: [
+      "Revenue", "Data Cost", "Gross Margin", "Variable Cost", "CM1 (Contribution Margin)",
+      "Marketing Cost", "CM2 (Contribution Margin)", "Other Cost", "EBITDA (After One-off Cost)",
+      "Total Number of Clients", "One-off Cost",
+    ],
+    countRowMatchers: [/^Total Number of Clients$/i, /^Number of Customers \(Pay per Usage\)$/i, /^Number of Customers \(Subscription Basis\)$/i],
+    rupeeAvgRowMatchers: [/^ARPU for Pay per Usage$/i, /^ARPU for Subscription Basis$/i],
+    showForecast: false,
+    layout: "generic",
+  },
+  castler: {
+    id: "castler",
+    defaultDescription: {
+      companyName: "Castler",
+      description: "Ncome Tech Solutions Private Limited (brand: Castler) provides escrow-as-a-service " +
+        "infrastructure, processing customer transaction volume (GTV) through managed escrow accounts and earning " +
+        "setup and recurring escrow fees from Account Opening and Software Escrow product lines.",
+      tags: ["Escrow-as-a-Service", "Fintech Infrastructure"],
+      scaleMetrics: [],
+      strategicNote: null,
+    },
+    // Distinctive Castler row names — none appear in any other company's sheet.
+    signals: [/^total\s*-\s*\(a\)$/i, /^total\s*-\s*\(b\)$/i, /^ebitda\s*\(\s*a-b\s*\)$/i, /#\s*of\s*customers\s*total/i, /gtv\s*\(in\s*cr\)/i],
+    // The workbook's headline revenue/cost/EBITDA rows are literally named
+    // "Total - (A)" / "Total - (B)" / "EBITDA ( A-B)" (a bare A-minus-B P&L,
+    // no separate COGS/Opex split), same minimal-waterfall shape as
+    // Fundamento's "Total Revenue / Total Cost / EBITDA". IMPORTANT: unlike
+    // Fundamento, the apparent revenue and cost sub-line rows in this sheet
+    // (Revenue from volume processes, One-time Set-up Fee, Recurring Revenue
+    // x2, Direct/Sales&Marketing/Employee/G&A costs) were checked and do NOT
+    // cleanly sum to "Total - (A)" / "Total - (B)" in every period (the merge
+    // across two source cuts during standardization means these sub-lines
+    // aren't a reliable decomposition) — left OUT of pnlRevenueSubLines
+    // entirely rather than shown as a breakdown that doesn't add up to its
+    // own subtotal. They still surface as their own individual KPI cards via
+    // priorityOrder/alphabetical fallback, just not as a P&L sub-line group.
+    revenueBaseKey: "Total - (A)",
+    revenueLabel: "Total Revenue",
+    opexKey: "Total - (B)",
+    keyAliases: {
+      "EBITDA": "EBITDA ( A-B)",
+    },
+    pnlRevenueSubLines: [],
+    priorityOrder: [
+      "Total - (A)", "Total - (B)", "EBITDA ( A-B)", "# of customers total", "GTV (in Cr)", "Head count",
+      "ARPU", "Gross Margin %", "Churn rate%", "CAC", "LTV",
+    ],
+    // NOTE (data-quality flag, not fixed here — file lives outside this repo's
+    // source-of-truth folders): the source standardized workbook's "GTV (in
+    // Cr)" and "Running balance of Escrow account (in Cr)" row LABELS still
+    // say "(in Cr)" but their actual stored VALUES were converted to plain INR
+    // during standardization (verified: Apr-2021 GTV = 14,833,045.3, i.e.
+    // ~1.48 Cr in raw rupees, not 1.48 as a Cr-scale number) — so these rows
+    // are correctly left OUT of alreadyCrRowMatchers (the dashboard's normal
+    // /1e7 conversion is the right one here), but the label text itself is
+    // misleading if read directly from the sheet. Worth relabeling upstream.
+    countRowMatchers: [/^#\s*of\s*customers\s*total$/i, /^#\s*of\s*one\s*time\s*customer$/i, /^#\s*of\s*subscription\s*customer$/i, /^#\s*of\s*billed\s*customers$/i, /^head\s*count$/i],
+    rateRowMatchers: [/gross\s*margin\s*%/i, /contribution\s*margin\s*%/i, /churn\s*rate%/i, /customer\s*retention\s*rate\s*%/i, /ebitda\s*%/i],
+    rupeeAvgRowMatchers: [/^arpu$/i, /^cac$/i, /^ltv$/i],
+    showForecast: false,
+    layout: "generic",
+  },
+  datasutram: {
+    id: "datasutram",
+    defaultDescription: {
+      companyName: "Data Sutram",
+      description: "Extrapolate Advisors Private Limited (brand: Data Sutram) is a data/analytics platform " +
+        "monetized via API and Batch product revenue plus other revenue lines, tracked through a Sales & " +
+        "Marketing / Product Dev / Corporate Costs cost structure.",
+      tags: ["Data & Analytics", "B2B SaaS"],
+      scaleMetrics: [],
+      strategicNote: null,
+    },
+    // Distinctive Data Sutram row names — none appear in any other company's sheet.
+    signals: [/gmv\s*\(%\s*of\s*revenue\)\s*-\s*overall/i, /product\s*revenue\s*-\s*(api|batch)/i, /corporate\s*costs\s*-\s*management/i, /sales\s*&\s*marketing\s*-\s*discounts\s*&\s*pocs/i],
+    revenueBaseKey: "Total Revenue",
+    revenueLabel: "Total Revenue",
+    // Verified numerically (a later FY25-26 period): "Product Revenue" +
+    // "Other Revenue" sums exactly to "Total Revenue". "Product Revenue - API"
+    // and "Product Revenue - Batch" are a further split of "Product Revenue"
+    // itself (only populated for Apr-Jun'26, where the source didn't also
+    // report a combined figure) — not siblings of it, so not included here.
+    pnlRevenueSubLines: [/^Product Revenue$/i, /^Other Revenue$/i],
+    // Two reporting eras use differently-named, non-overlapping rows for the
+    // same concepts (FY22-25 vs FY25-27) and were deliberately NOT merged
+    // during standardization (unverified whether definitions/sign conventions
+    // match) — "Total Expense" (no trailing s) is the current/most-recent
+    // era's opex row, used as opexKey; "Total Expenses" (FY22-25) surfaces as
+    // its own separate KPI card via priorityOrder instead of being aliased in.
+    // Same split applies to "EBITDA" (FY22-25) vs "Net Burn" (FY25-27,
+    // EBITDA's closest analog) — kept as two distinct rows, not aliased.
+    opexKey: "Total Expense",
+    priorityOrder: [
+      "Total Revenue", "Product Revenue", "Other Revenue", "Total COGS", "Total Expense", "Total Expenses",
+      "EBITDA", "Net Burn", "Gross Burn", "Total Number of Clients", "Closing Cash/Bank Balance",
+    ],
+    countRowMatchers: [/^Total Number of Clients$/i],
+    rateRowMatchers: [/^Recurrent Revenue \(%\)$/i, /^Gross Margin \(%\)$/i, /^GMV \(% of Revenue\) - Overall$/i],
+    showForecast: false,
+    layout: "generic",
+  },
 };
 
 function scoreCompanyConfigs(kpiKeys) {
@@ -1475,6 +1662,84 @@ function periodGrowth(list, idx, key, quarterly) {
   return (curr[key] - prev[key]) / Math.abs(prev[key]);
 }
 
+/* ============================================================
+   NARRATIVE / SELECTION HELPERS — shared with the PPTX report
+   builder (src/lib/reportContent.js) as well as the dashboard
+   components in MISDashboard.jsx. These moved here (verbatim,
+   no logic change) precisely so the generated report anchors on
+   the SAME periods, picks the SAME margin concept, and describes
+   an EBITDA move with the SAME wording the website shows for the
+   same company — one implementation, not two that can drift.
+   ============================================================ */
+
+/* Anchor periods for every narrative on the page (and in the report):
+   the most recent COMPLETE Q4 (the newsletter is framed as a fiscal
+   year-end update) falling back to the latest complete quarter of any
+   kind, plus the latest complete FY and the one before it. */
+function getExecStats(ds) {
+  const revKey = ds.revenueBaseKey;
+  const hasData = (q) => q && (typeof q[revKey] === "number" ? q[revKey] !== 0 : true);
+  const isFYComplete = (f) => {
+    if (f.partial) return false;
+    const q4 = ds.qData.find(q => q.fyEnd === f.fyEnd && q.qNum === 4);
+    return q4 && hasData(q4);
+  };
+
+  const completeQ = ds.qData.filter(q => q.complete && hasData(q));
+  // The narrative is framed as a fiscal year-end (Q4) update, so anchor on the most
+  // recent complete Q4 when one exists — falling back to the latest complete quarter
+  // of any kind if the sheet hasn't reached a Q4 yet.
+  const completeQ4s = completeQ.filter(q => q.qNum === 4);
+  const latestQ = completeQ4s.length ? completeQ4s[completeQ4s.length - 1] : (completeQ.length ? completeQ[completeQ.length - 1] : null);
+  const prevYearQ = latestQ ? ds.qData.find(q => q.qNum === latestQ.qNum && q.fyEnd === latestQ.fyEnd - 1) : null;
+  const completeFY = ds.fyData.filter(f => isFYComplete(f) && hasData(f));
+  const latestFY = completeFY.length ? completeFY[completeFY.length - 1] : null;
+  const prevFYIdx = latestFY ? ds.fyData.findIndex(f => f.key === latestFY.key) - 1 : -1;
+  const prevFY = prevFYIdx >= 0 ? ds.fyData[prevFYIdx] : null;
+  return { latestQ, prevYearQ, latestFY, prevFY };
+}
+
+/* Picks whichever margin the sheet actually supports, in order of how
+   commonly it's tracked, so the third narrative bullet always has something
+   meaningful to say regardless of which KPI rows a given company fills in. */
+function bestMarginKey(ds) {
+  if (ds.hasRevenue && ds.hasEBITDA) return ["EBITDA Margin", "EBITDA"];
+  if (ds.hasRevenue && ds.hasNet) return ["Net Margin", "Net Profit"];
+  if (ds.hasRevenue && ds.hasGP) return ["Gross Margin", "Gross Profit"];
+  return null;
+}
+
+/* Plain-English description of an EBITDA move that stays correct when either
+   side is negative ("loss narrowed" reads right where "grew" would not). */
+function describeEbitdaTrend(curr, prev) {
+  if (typeof curr !== "number" || typeof prev !== "number") return null;
+  if (prev < 0 && curr < 0) return curr > prev ? "loss narrowed" : curr < prev ? "loss widened" : "loss held steady";
+  if (prev < 0 && curr >= 0) return "turned positive";
+  if (prev >= 0 && curr < 0) return "turned negative";
+  return curr > prev ? "grew" : curr < prev ? "declined" : "held steady";
+}
+
+/* ============================================================
+   KEY PERFORMANCE INDICATORS (default layout) — revenue-mix rows
+   (business-line revenue as a % of Total Revenue). Row -> source-
+   column matching is semantic, not a single literal string: each
+   KPI concept carries a small synonym set (a company might call it
+   "Platform Revenue", "SaaS Revenue", "Subscription Revenue", ...)
+   and is matched against every *revenue* line in the uploaded sheet
+   (Total Revenue itself is excluded — it's the denominator, never a
+   component). Every kpiKey can be claimed by at most one KPI row
+   (first rule to match wins), so the same revenue line is never
+   summed into two different KPIs. A KPI with zero matching lines
+   renders N/A rather than falling back to an unrelated line.
+   Order matters: most specific / least ambiguous concept first, so
+   it claims its line(s) before broader concepts get a look.
+   ============================================================ */
+const KPI_SEMANTIC_RULES = [
+  { label: "Campaign Management", slug: "campaignManagement", match: /campaign/i },
+  { label: "Platform Revenue", slug: "platformRevenue", match: /platform|software\s*revenue|saas\s*revenue|technology\s*revenue|subscription/i },
+  { label: "SetUp Revenue", slug: "setupRevenue", match: /set[\s-]?up|onboard|deploy(ment)?|implementation|integration\s*revenue/i },
+];
+
 /* News-category classification — shared so a headline is tagged the same
    way whether it came from a manager-curated "News Feed" sheet, the old
    client-side live-fetch fallback, or the new server-side Tavily research
@@ -1522,5 +1787,9 @@ export {
   fallbackKPI,
   withFallback,
   periodGrowth,
+  getExecStats,
+  bestMarginKey,
+  describeEbitdaTrend,
+  KPI_SEMANTIC_RULES,
   guessNewsCategory,
 };

@@ -4,16 +4,11 @@
 -- which is imported separately via `npm run seed:mis` (scripts/seed.mjs)
 -- from the actual master Excel files, never typed by hand.
 --
--- Fund membership below is the REAL allocation, taken from the
--- user-provided "Fund details.xlsx", with one company per fund.
--- That Excel lists Leegality, GrayQuest and Finvu under both funds
--- (Fund 2 followed on into Fund 1 companies); per the user's decision
--- each appears under its originating fund only — Fund 1 — since that is
--- where the Excel lists them first and where they carry a full slide in
--- the Fund 1 newsletter. See migrations 0003_fund_corrections.sql and
--- 0005_one_fund_per_company.sql for how the live database got here.
--- Reassigning a company to a different fund is a one-row UPDATE, no
--- code change.
+-- Fund membership below is a STARTING POINT (Fund 1 = the four
+-- companies onboarded first, Fund 2 = the five added after) — update
+-- fund_companies once the real IIFL Fintech Fund 1 / Fund 2 membership
+-- is confirmed. Reassigning a company to a different fund is a
+-- one-row UPDATE here, no code change.
 --
 -- Safe to re-run: every insert is an idempotent upsert.
 -- ============================================================
@@ -35,8 +30,7 @@ insert into companies (slug, name, legal_name) values
   ('fundamento',     'Fundamento',         'Fundamento'),
   ('knightFintech',  'Knight FinTech',     'Knight FinTech'),
   ('traqcheck',      'Traqcheck',          'Traqcheck'),
-  ('castler',        'Castler',            'Ncome Tech Solutions Private Limited'),
-  ('datasutram',     'Data Sutram',        'Extrapolate Advisors Private Limited')
+  ('castler',        'Castler',            'Ncome Tech Solutions Private Limited')
 on conflict (slug) do update set
   name = excluded.name,
   legal_name = excluded.legal_name;
@@ -47,24 +41,28 @@ insert into company_configs (company_id, config_key)
 select id, slug from companies
 on conflict (company_id) do update set config_key = excluded.config_key;
 
--- Fund 1, per Fund details.xlsx (Finvu is listed there too but has no
--- companies row yet — add it here once its MIS and config exist).
+-- Fund 1: the four companies onboarded first.
 insert into fund_companies (fund_id, company_id, display_order)
 select f.id, c.id, row_number() over (order by c.slug)
 from funds f, companies c
 where f.slug = 'fund-1'
-  and c.slug in (
-    'leegality', 'finbox', 'datasutram', 'easyrewardz', 'multipl',
-    'fastsurance', 'riskcovry', 'castler', 'grayquest', 'apexFutureLabs'
-  )
+  and c.slug in ('easyrewardz', 'grayquest', 'riskcovry', 'multipl')
 on conflict (fund_id, company_id) do nothing;
 
--- Fund 2: the companies the Excel lists under Fund 2 ONLY. Leegality and
--- GrayQuest also appear in its Fund 2 block, but are deliberately left to
--- Fund 1 above so no company shows up under two funds — see the header.
+-- Fund 2: the five companies added afterwards.
 insert into fund_companies (fund_id, company_id, display_order)
 select f.id, c.id, row_number() over (order by c.slug)
 from funds f, companies c
 where f.slug = 'fund-2'
-  and c.slug in ('fundamento', 'knightFintech', 'traqcheck')
+  and c.slug in ('fastsurance', 'apexFutureLabs', 'leegality', 'finbox', 'fundamento')
+on conflict (fund_id, company_id) do nothing;
+
+-- Knight FinTech, Traqcheck and Castler are three brand-new companies added
+-- to this dashboard in this session. User-confirmed: keep all three in
+-- fund-2 for now.
+insert into fund_companies (fund_id, company_id, display_order)
+select f.id, c.id, row_number() over (order by c.slug)
+from funds f, companies c
+where f.slug = 'fund-2'
+  and c.slug in ('knightFintech', 'traqcheck', 'castler')
 on conflict (fund_id, company_id) do nothing;

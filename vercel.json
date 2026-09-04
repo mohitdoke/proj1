@@ -7,6 +7,12 @@
     },
     "api/companies/[companyId]/research.js": {
       "maxDuration": 20
+    },
+    "api/companies/[companyId]/report.js": {
+      "maxDuration": 30
+    },
+    "api/reports/generate.py": {
+      "maxDuration": 30
     }
   }
 }
