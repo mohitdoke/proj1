@@ -38,6 +38,10 @@ const SOURCE_FILES = [
   { slug: "finbox", file: "misdata/FINBOX_Standardized_MIS_Template.xlsx" },
   { slug: "fundamento", file: "misdata/FUNDAMENTO_Standardized_MIS_Template.xlsx" },
   { slug: "leegality", file: "misdata/Leegality_Standardized_MIS_Template.xlsx" },
+  { slug: "knightFintech", file: "misdata/KnightFinTech_Standardized_MIS_Template.xlsx" },
+  { slug: "traqcheck", file: "misdata/Traqcheck_Standardized_MIS_Template.xlsx" },
+  { slug: "castler", file: "misdata/Castler_Standardized_MIS_Template.xlsx" },
+  { slug: "datasutram", file: "misdata/DataSutram_Standardized_MIS_Template.xlsx" },
 ];
 
 function parseOnlyArg() {

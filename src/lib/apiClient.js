@@ -42,6 +42,32 @@ export async function fetchCompanyResearch(companySlug, { refresh = false } = {}
   };
 }
 
+/** Downloads this company's auto-generated summary report (.pptx) and
+ * triggers a browser save, same pattern as the existing Excel export button
+ * uses (an in-memory blob + a throwaway <a download> click, no server-side
+ * file persisted anywhere). companyId can be the slug or the UUID - the
+ * backend route accepts either. */
+export async function downloadCompanyReport(companyId) {
+  const res = await fetch(`/api/companies/${encodeURIComponent(companyId)}/report`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body?.error || `Report generation failed (${res.status}).`);
+  }
+  const blob = await res.blob();
+  const disposition = res.headers.get("content-disposition") || "";
+  const match = disposition.match(/filename="([^"]+)"/);
+  const filename = match ? match[1] : "Report.pptx";
+
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
 /** Manager-only upload. `adminToken` goes in the Authorization header (see
  * lib/apiHelpers.js requireAdmin) — never logged, never stored beyond the
  * caller's own component state. */

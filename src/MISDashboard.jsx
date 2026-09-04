@@ -39,6 +39,10 @@ import {
   fallbackKPI,
   withFallback,
   periodGrowth,
+  getExecStats,
+  bestMarginKey,
+  describeEbitdaTrend,
+  KPI_SEMANTIC_RULES,
   guessNewsCategory,
 } from "./lib/misEngine.js";
 
@@ -97,21 +101,6 @@ function buildQuarterlyForecast(qData, key, count = 2) {
   forecastQuarters.forEach(f => chartData.push({ period: f.key, actual: null, projected: f.value }));
 
   return { chartData, slope, forecastQuarters };
-}
-
-function getExecStats(ds) {
-  const completeQ = ds.qData.filter(q => q.complete);
-  // The narrative is framed as a fiscal year-end (Q4) update, so anchor on the most
-  // recent complete Q4 when one exists — falling back to the latest complete quarter
-  // of any kind if the sheet hasn't reached a Q4 yet.
-  const completeQ4s = completeQ.filter(q => q.qNum === 4);
-  const latestQ = completeQ4s.length ? completeQ4s[completeQ4s.length - 1] : (completeQ.length ? completeQ[completeQ.length - 1] : null);
-  const prevYearQ = latestQ ? ds.qData.find(q => q.qNum === latestQ.qNum && q.fyEnd === latestQ.fyEnd - 1) : null;
-  const completeFY = ds.fyData.filter(f => !f.partial);
-  const latestFY = completeFY.length ? completeFY[completeFY.length - 1] : null;
-  const prevFYIdx = latestFY ? ds.fyData.findIndex(f => f.key === latestFY.key) - 1 : -1;
-  const prevFY = prevFYIdx >= 0 ? ds.fyData[prevFYIdx] : null;
-  return { latestQ, prevYearQ, latestFY, prevFY };
 }
 
 function Delta({ curr, prev, good = "up" }) {
@@ -512,14 +501,11 @@ function ExportButton({ onClick, label = "Export to Excel" }) {
    Campaign Management" into "Platform Revenue" would be a guess
    dressed up as a number, which is exactly what this table must
    never do.
+
+   KPI_SEMANTIC_RULES itself now lives in src/lib/misEngine.js (imported
+   above) so the generated PPTX report picks exactly the same rows for
+   exactly the same workbook — see src/lib/reportContent.js.
    ============================================================ */
-const KPI_SEMANTIC_RULES = [
-  // Order matters: most specific / least ambiguous concept first,
-  // so it claims its line(s) before broader concepts get a look.
-  { label: "Campaign Management", slug: "campaignManagement", match: /campaign/i },
-  { label: "Platform Revenue", slug: "platformRevenue", match: /platform|software\s*revenue|saas\s*revenue|technology\s*revenue|subscription/i },
-  { label: "SetUp Revenue", slug: "setupRevenue", match: /set[\s-]?up|onboard|deploy(ment)?|implementation|integration\s*revenue/i },
-];
 
 function KeyPerformanceIndicatorsTable({ ds }) {
   const [mode, setMode] = useState("quarterly");
@@ -1802,16 +1788,12 @@ function IndustryCompetitorsPage({ ds }) {
    NEW — Executive summary (narrative, computed live off the
    latest complete quarter / FY in the sheet) and business
    description (static company context).
+   bestMarginKey() and getExecStats(), which decide WHICH periods and
+   WHICH margin every narrative below anchors on, now live in
+   src/lib/misEngine.js (imported above) — shared with the PPTX report
+   builder so the deck narrates the same periods and the same margin
+   concept the page does.
    ============================================================ */
-/* Picks whichever margin the sheet actually supports, in order of how
-   commonly it's tracked, so the third narrative bullet always has something
-   meaningful to say regardless of which KPI rows a given company fills in. */
-function bestMarginKey(ds) {
-  if (ds.hasRevenue && ds.hasEBITDA) return ["EBITDA Margin", "EBITDA"];
-  if (ds.hasRevenue && ds.hasNet) return ["Net Margin", "Net Profit"];
-  if (ds.hasRevenue && ds.hasGP) return ["Gross Margin", "Gross Profit"];
-  return null;
-}
 
 function ExecutiveSummary({ ds }) {
   const { latestQ, prevYearQ, latestFY, prevFY } = getExecStats(ds);
@@ -1924,14 +1906,10 @@ function ExecutiveSummary({ ds }) {
    number computed straight from ds.fyData/ds.qData, or renders a
    plain "not enough data yet" fallback — never a qualitative claim
    without a number behind it.
+   describeEbitdaTrend() (used by this and every other company's
+   commentary) now lives in src/lib/misEngine.js — imported above and
+   shared with the PPTX report builder.
    ============================================================ */
-function describeEbitdaTrend(curr, prev) {
-  if (typeof curr !== "number" || typeof prev !== "number") return null;
-  if (prev < 0 && curr < 0) return curr > prev ? "loss narrowed" : curr < prev ? "loss widened" : "loss held steady";
-  if (prev < 0 && curr >= 0) return "turned positive";
-  if (prev >= 0 && curr < 0) return "turned negative";
-  return curr > prev ? "grew" : curr < prev ? "declined" : "held steady";
-}
 
 function GrayQuestCommentary({ ds }) {
   const { latestQ, prevYearQ, latestFY, prevFY } = getExecStats(ds);

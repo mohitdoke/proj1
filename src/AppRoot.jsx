@@ -1,7 +1,38 @@
 import React, { useState, useEffect, useCallback, useMemo } from "react";
+import { FileText } from "lucide-react";
 import { COMPANY_CONFIGS, buildDataset } from "./lib/misEngine.js";
-import { fetchFunds, fetchCompaniesForFund, fetchCompanyDashboardInput, fetchCompanyResearch, uploadMisFile } from "./lib/apiClient.js";
+import { fetchFunds, fetchCompaniesForFund, fetchCompanyDashboardInput, fetchCompanyResearch, uploadMisFile, downloadCompanyReport } from "./lib/apiClient.js";
 import { DashboardView, GlobalStyles } from "./MISDashboard.jsx";
+
+/* "Generate Report" masthead button — same visual pattern as MISDashboard's
+   own ExportButton (reuses its "export-btn" CSS class), triggering a
+   one-company summary .pptx download via GET /api/companies/:id/report.
+   Kept local to AppRoot since ExportButton itself isn't exported. */
+function ReportButton({ companyId }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+
+  const handleClick = useCallback(async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await downloadCompanyReport(companyId);
+    } catch (err) {
+      setError(String(err.message || err));
+    } finally {
+      setBusy(false);
+    }
+  }, [companyId]);
+
+  return (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+      <button type="button" className="export-btn" onClick={handleClick} disabled={busy}>
+        <FileText size={13} /> {busy ? "Generating…" : "Generate Report"}
+      </button>
+      {error && <span className="fund-nav__error" title={error}>Report failed</span>}
+    </span>
+  );
+}
 
 /* ============================================================
    AppRoot — the app normal users actually load. No Excel upload
@@ -180,6 +211,7 @@ export default function AppRoot() {
         <DashboardView
           ds={ds.built}
           fileName={ds.uploadMeta?.originalFilename}
+          headerActions={<ReportButton companyId={ds.company?.id || companySlug} />}
           banner={researchWarning ? <div className="upload-bar upload-bar--info"><span>{researchWarning}</span></div> : null}
         />
       )}
